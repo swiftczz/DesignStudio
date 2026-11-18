@@ -18,8 +18,19 @@ final class AppModel {
     var designSystems: [DesignSystem] = []
     var providers: [ProviderProfile] = []
     var settings = AppSettings()
-    var route: SidebarRoute = .home
-    /// 左侧项目边栏的显示状态（全屏时收起）
+    var route: SidebarRoute = .home {
+        didSet {
+            // 从主页 / 设计系统进入项目时收起项目边栏，只留对话栏和画布；离开项目回到这些页面时再展开。
+            // 在项目之间切换（边栏已手动打开）时保持用户当前的状态
+            switch (oldValue, route) {
+            case (.project, .project): break
+            case (_, .project): withAnimation(.snappy(duration: 0.25)) { sidebarVisibility = .detailOnly }
+            case (.project, _): withAnimation(.snappy(duration: 0.25)) { sidebarVisibility = .all }
+            default: break
+            }
+        }
+    }
+    /// 左侧项目边栏的显示状态（进入项目和全屏时收起）
     var sidebarVisibility: NavigationSplitViewVisibility = .all
     var thumbnailStamps: [UUID: Date] = [:]
 
