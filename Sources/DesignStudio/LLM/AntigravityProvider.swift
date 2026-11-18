@@ -58,6 +58,9 @@ nonisolated struct AntigravityProvider: LLMProvider {
                             switch obj["event"] as? String {
                             case "init":
                                 let model = (obj["init"] as? [String: Any])?["model"] as? String ?? ""
+                                if profile.model.trimmed.isEmpty, !model.isEmpty {
+                                    ModelCatalog.recordReportedModel(model, kind: .antigravity)
+                                }
                                 continuation.yield(.status(model.isEmpty ? "Antigravity 已连接" : "Antigravity 已连接 · \(model)"))
                             case "step_update":
                                 guard let step = obj["step_update"] as? [String: Any] else { break }

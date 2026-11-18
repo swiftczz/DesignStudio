@@ -116,15 +116,27 @@ nonisolated struct ModelFamily: Hashable, Sendable {
 ///   与 `codex` 自带的模型选择器保持一致；文件缺失时退回内置列表。
 nonisolated enum ModelCatalog {
     private static let claudeLimits = ModelLimits(contextWindow: 1_000_000, maxOutput: 128_000)
-    /// `claude --effort` 接受的强度；默认强度由 Claude Code 决定，菜单里显示「默认」
+    /// `claude --effort` 接受的强度（Claude Code 缓存的模型目录里有每个模型的准确列表时以目录为准）
     private static let claudeEfforts = ["low", "medium", "high", "xhigh", "max"]
 
-    static let claude: [ModelOption] = [
+    private static let claudeBase: [ModelOption] = [
         ModelOption(id: "claude-fable-5-2", title: "Fable 5.2", limits: claudeLimits, efforts: claudeEfforts),
         ModelOption(id: "claude-opus-5-5", title: "Opus 5.5", limits: claudeLimits, efforts: claudeEfforts),
         ModelOption(id: "claude-sonnet-5-5", title: "Sonnet 5.5", limits: claudeLimits, efforts: claudeEfforts),
         ModelOption(id: "claude-haiku-5-5", title: "Haiku 5.5", limits: claudeLimits, efforts: claudeEfforts)
     ]
+
+    /// Claude 模型，带上每个模型实际生效的默认思考强度（菜单里直接显示，不写「默认」）
+    static var claude: [ModelOption] {
+        let catalog = claudeCatalog()
+        let settings = claudeSettings()
+        return claudeBase.map { option in
+            var o = option
+            if let levels = catalog?.levels[o.id], !levels.isEmpty { o.efforts = levels }
+            o.defaultEffort = claudeEffectiveEffort(model: o.id, catalog: catalog, settings: settings)
+            return o
+        }
+    }
 
     private static let codexEfforts = ["low", "medium", "high", "xhigh", "max"]
 
@@ -148,7 +160,7 @@ nonisolated enum ModelCatalog {
     /// CLI 模型的上下文上限；留空（CLI 默认模型）时尽量推断，推断不出返回未知
     static func limits(for id: String, kind: ProviderKind) -> ModelLimits {
         var modelID = id
-        if modelID.isEmpty, kind == .codex { modelID = codexConfiguredDefault() ?? "" }
+        if modelID.isEmpty { modelID = cliDefaultModel(kind) ?? "" }
         if let hit = known(for: kind).first(where: { $0.id == modelID }) { return hit.limits }
         // Claude CLI 的别名（opus / sonnet / fable…）与默认模型都是当前一代，上下文同为 1M
         if kind == .claudeCode, modelID.isEmpty || !modelID.contains("-4-") { return claudeLimits }
@@ -200,6 +212,127 @@ nonisolated enum ModelCatalog {
               let pairs = try? JSONDecoder().decode([[String]].self, from: data) else { return antigravityFallback }
         let list = pairs.compactMap { $0.count == 2 ? ModelOption(id: $0[0], title: $0[1]) : nil }
         return list.isEmpty ? antigravityFallback : list
+    }
+
+    // MARK: - CLI 默认模型
+
+    /// 模型留空时 CLI 实际使用的模型 ID：
+    /// Codex 读 `~/.codex/config.toml`，Antigravity 读 `~/.gemini/antigravity-cli/settings.json`，
+    /// Claude Code 读 `~/.claude/settings.json` 的 `model`；都没有时用上次运行时 CLI 报告的模型
+    static func cliDefaultModel(_ kind: ProviderKind) -> String? {
+        let configured: String? = switch kind {
+        case .codex: codexConfiguredDefault()
+        case .antigravity: antigravityConfiguredDefault()
+        case .claudeCode: claudeConfiguredDefault()
+        default: nil
+        }
+        return configured ?? lastReportedModel(kind)
+    }
+
+    private static var home: URL { FileManager.default.homeDirectoryForCurrentUser }
+
+    private static func jsonString(_ url: URL, key: String) -> String? {
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let value = (obj[key] as? String)?.trimmingCharacters(in: .whitespaces), !value.isEmpty else { return nil }
+        return value
+    }
+
+    /// agy 的设置里记的是显示名（「Gemini 4 Argon (Medium)」），换成模型 ID
+    static func antigravityConfiguredDefault() -> String? {
+        guard let value = jsonString(home.appending(path: ".gemini/antigravity-cli/settings.json"), key: "model") else { return nil }
+        return antigravityModels().first { $0.title == value || $0.id == value }?.id ?? value
+    }
+
+    /// Claude Code 的默认模型：环境变量 / settings.json 的 `model`（可能是别名 opus / sonnet…），
+    /// 都没有时用 Claude Code 缓存的模型目录里记录的当前模型
+    static func claudeConfiguredDefault() -> String? {
+        let value = ProcessInfo.processInfo.environment["ANTHROPIC_MODEL"]
+            ?? jsonString(home.appending(path: ".claude/settings.json"), key: "model")
+        if let value, !value.isEmpty, value.lowercased() != "default" {
+            let alias = value.lowercased().replacingOccurrences(of: "[1m]", with: "")
+            return claudeBase.first { $0.id.contains("-\(alias)-") }?.id ?? value
+        }
+        return claudeCatalog()?.currentModel
+    }
+
+    // MARK: - Claude Code 模型目录
+
+    /// Claude Code 按账号缓存的模型目录（`~/.claude/cache/model-catalog/*-cc.json`，cc = 命令行）：
+    /// 每个模型支持的强度、内置默认强度，以及这个账号当前的模型和各模型的强度
+    nonisolated struct ClaudeCatalog: Sendable {
+        var currentModel: String?
+        var levels: [String: [String]] = [:]
+        var builtinDefault: [String: String] = [:]
+        var stateEffort: [String: String] = [:]
+    }
+
+    nonisolated(unsafe) private static var claudeCatalogCache: (stamp: Date, catalog: ClaudeCatalog?)?
+
+    static func claudeCatalog() -> ClaudeCatalog? {
+        let dir = home.appending(path: ".claude/cache/model-catalog")
+        let files = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
+            .filter { $0.lastPathComponent.hasSuffix("-cc.json") }
+        let dated = files.compactMap { url -> (URL, Date)? in
+            guard let d = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate else { return nil }
+            return (url, d)
+        }
+        guard let newest = dated.max(by: { $0.1 < $1.1 }) else { return nil }
+
+        lock.lock(); defer { lock.unlock() }
+        if let cache = claudeCatalogCache, cache.stamp == newest.1 { return cache.catalog }
+        let catalog = parseClaudeCatalog((try? Data(contentsOf: newest.0)) ?? Data())
+        claudeCatalogCache = (newest.1, catalog)
+        return catalog
+    }
+
+    static func parseClaudeCatalog(_ data: Data) -> ClaudeCatalog? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let catalog = root["catalog"] as? [String: Any] else { return nil }
+        var result = ClaudeCatalog()
+        for m in (catalog["config"] as? [String: Any])?["models"] as? [[String: Any]] ?? [] {
+            guard let id = m["id"] as? String, let runtime = m["runtime"] as? [String: Any] else { continue }
+            if let levels = runtime["effort_levels"] as? [String] { result.levels[id] = levels }
+            if let d = runtime["default_effort"] as? String { result.builtinDefault[id] = d }
+        }
+        let state = catalog["state"] as? [String: Any]
+        result.currentModel = state?["model"] as? String
+        for t in state?["thinking_by_model"] as? [[String: Any]] ?? [] {
+            if let id = t["id"] as? String, let e = (t["thinking"] as? [String: Any])?["effort"] as? String {
+                result.stateEffort[id] = e
+            }
+        }
+        return result
+    }
+
+    private static func claudeSettings() -> [String: Any] {
+        guard let data = try? Data(contentsOf: home.appending(path: ".claude/settings.json")),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        return obj
+    }
+
+    /// 不传 --effort 时 Claude Code 实际用的强度，优先级与 Claude Code 一致：
+    /// 环境变量 CLAUDE_CODE_EFFORT_LEVEL → settings.json 里该模型的 effortLevel → 顶层 effortLevel
+    /// → 模型目录里这个账号的强度 → 模型的内置默认强度
+    static func claudeEffectiveEffort(model: String, catalog: ClaudeCatalog?, settings: [String: Any]) -> String? {
+        if let env = ProcessInfo.processInfo.environment["CLAUDE_CODE_EFFORT_LEVEL"], !env.isEmpty { return env.lowercased() }
+        if let perModel = ((settings["modelSettings"] as? [String: Any])?[model] as? [String: Any])?["effortLevel"] as? String {
+            return perModel
+        }
+        if let top = settings["effortLevel"] as? String { return top }
+        return catalog?.stateEffort[model] ?? catalog?.builtinDefault[model]
+    }
+
+    /// CLI 每次运行开始时会报告实际使用的模型，记下来作为最后的依据
+    static func recordReportedModel(_ model: String, kind: ProviderKind) {
+        var id = model.trimmingCharacters(in: .whitespaces)
+        if let bracket = id.firstIndex(of: "[") { id = String(id[..<bracket]) }   // claude-opus-5-5[1m]
+        guard !id.isEmpty else { return }
+        UserDefaults.standard.set(id, forKey: "cliReportedModel." + kind.rawValue)
+    }
+
+    static func lastReportedModel(_ kind: ProviderKind) -> String? {
+        UserDefaults.standard.string(forKey: "cliReportedModel." + kind.rawValue)
     }
 
     /// Codex CLI 配置里的默认模型（`~/.codex/config.toml` 顶层的 `model = "…"`）

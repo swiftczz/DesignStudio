@@ -592,3 +592,56 @@ struct CLIDiagnosisTests {
         #expect(CLIDiagnosis.reinstallCommand(for: "zsh: command not found: codex", kind: .codex) == nil)
     }
 }
+
+@Suite("CLI 默认模型")
+struct CLIDefaultModelTests {
+    @Test func reportedModelIsRecordedWithoutContextSuffix() {
+        let key = "cliReportedModel." + ProviderKind.claudeCode.rawValue
+        let saved = UserDefaults.standard.string(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+        ModelCatalog.recordReportedModel("claude-opus-5-5[1m]", kind: .claudeCode)
+        #expect(ModelCatalog.lastReportedModel(.claudeCode) == "claude-opus-5-5")
+    }
+
+    @Test func displayModelNeverSaysDefaultWhenKnown() {
+        var p = ProviderProfile.codex()
+        p.model = ""
+        if let id = ModelCatalog.cliDefaultModel(.codex) {
+            #expect(p.displayModel == ModelCatalog.title(for: id, kind: .codex))
+            #expect(p.cliDefaultTitle.hasPrefix("默认（"))
+        } else {
+            #expect(p.displayModel == "默认模型")
+        }
+    }
+}
+
+@Suite("Claude 实际思考强度")
+struct ClaudeEffortTests {
+    static let catalogJSON = #"""
+    {"catalog": {"config": {"models": [
+        {"id": "claude-opus-5-5", "runtime": {"effort_levels": ["low","medium","high","xhigh","max"], "default_effort": "medium"}},
+        {"id": "claude-sonnet-5-5", "runtime": {"effort_levels": ["low","medium","high"], "default_effort": "medium"}}
+      ]},
+      "state": {"model": "claude-opus-5-5", "thinking_by_model": [{"id": "claude-opus-5-5", "thinking": {"type": "effort", "effort": "xhigh"}}]}}}
+    """#
+
+    @Test func parsesCatalog() throws {
+        let c = try #require(ModelCatalog.parseClaudeCatalog(Data(Self.catalogJSON.utf8)))
+        #expect(c.currentModel == "claude-opus-5-5")
+        #expect(c.levels["claude-sonnet-5-5"] == ["low", "medium", "high"])
+        #expect(c.builtinDefault["claude-opus-5-5"] == "medium")
+        #expect(c.stateEffort["claude-opus-5-5"] == "xhigh")
+    }
+
+    @Test func precedenceMatchesClaudeCode() throws {
+        let c = try #require(ModelCatalog.parseClaudeCatalog(Data(Self.catalogJSON.utf8)))
+        // settings 里该模型的强度最优先（环境变量除外）
+        let perModel: [String: Any] = ["modelSettings": ["claude-opus-5-5": ["effortLevel": "high"]], "effortLevel": "low"]
+        #expect(ModelCatalog.claudeEffectiveEffort(model: "claude-opus-5-5", catalog: c, settings: perModel) == "high")
+        // 其次是顶层 effortLevel
+        #expect(ModelCatalog.claudeEffectiveEffort(model: "claude-sonnet-5-5", catalog: c, settings: perModel) == "low")
+        // 再其次是目录里这个账号的强度，最后是内置默认
+        #expect(ModelCatalog.claudeEffectiveEffort(model: "claude-opus-5-5", catalog: c, settings: [:]) == "xhigh")
+        #expect(ModelCatalog.claudeEffectiveEffort(model: "claude-sonnet-5-5", catalog: c, settings: [:]) == "medium")
+    }
+}

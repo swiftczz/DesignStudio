@@ -143,7 +143,11 @@ nonisolated struct ProviderProfile: Codable, Identifiable, Hashable, Sendable {
 
     var displayModel: String {
         let m = model.trimmed
-        if m.isEmpty { return "默认模型" }
+        if m.isEmpty {
+            // CLI 留空时显示 CLI 实际会用的模型（读它自己的配置，或上次运行时报告的模型）
+            if kind.isCLI, let id = ModelCatalog.cliDefaultModel(kind) { return ModelCatalog.title(for: id, kind: kind) }
+            return "默认模型"
+        }
         return kind.isCLI ? ModelCatalog.title(for: m, kind: kind) : title(forModel: m)
     }
 
@@ -152,9 +156,9 @@ nonisolated struct ProviderProfile: Codable, Identifiable, Hashable, Sendable {
         availableModels.first { $0.id == id }?.title ?? id
     }
 
-    /// 留空时 CLI 实际会用的模型（目前只有 Codex 能从配置里读到）
+    /// 菜单里「交给 CLI 决定」那一项：知道 CLI 实际用哪个模型时直接写出来
     var cliDefaultTitle: String {
-        if kind == .codex, let m = ModelCatalog.codexConfiguredDefault() {
+        if let m = ModelCatalog.cliDefaultModel(kind) {
             return "默认（\(ModelCatalog.title(for: m, kind: kind))）"
         }
         return "默认模型"
