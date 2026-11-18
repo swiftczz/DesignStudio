@@ -63,7 +63,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir "${STAGE}"
+# 部分 macOS 版本要求 --mountPoint 指定的目录已存在。
+mkdir "${STAGE}" "${MOUNT}"
 cp -R "${APP}" "${STAGE}/"
 ln -s /Applications "${STAGE}/Applications"
 if [ "${SIGN_IDENTITY}" = "-" ]; then
