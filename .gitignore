@@ -1,0 +1,19 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+/Packages/
+
+# Xcode
+*.xcodeproj
+xcuserdata/
+DerivedData/
+
+# 打包产物
+build/
+dist/
+*.app
+*.dmg
+*.dSYM
+
+# 系统文件
+.DS_Store

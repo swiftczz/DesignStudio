@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Developer ID 签名时使用（开启 Hardened Runtime）。
+  应用不在沙盒里运行：需要启动 claude / codex / agy 等命令行工具、读写自己的数据目录、访问任意 API 地址，
+  这些在 Hardened Runtime 下都不需要额外权限；WKWebView 的 JIT 在 WebKit 自己的进程里，也不需要 allow-jit。
+-->
+<dict/>
+</plist>

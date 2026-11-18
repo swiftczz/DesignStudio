@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- DesignStudio 应用图标源文件：修改后运行 Scripts/make-icon.sh 重新生成 AppIcon.icns -->
+  <!-- 纯色底板 + 一张生成出来的设计稿卡片（后面一层代表版本 / 图层），不使用渐变 -->
+  <defs>
+    <filter id="cardShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#7A2E16" flood-opacity="0.28"/>
+    </filter>
+    <clipPath id="squircle">
+      <rect x="100" y="100" width="824" height="824" rx="186"/>
+    </clipPath>
+  </defs>
+
+  <!-- 底板 -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="#D97757"/>
+
+  <!-- 画布点阵 -->
+  <g clip-path="url(#squircle)" fill="#FFFFFF" opacity="0.16">
+    <circle cx="190" cy="190" r="7"/><circle cx="270" cy="190" r="7"/><circle cx="190" cy="270" r="7"/>
+    <circle cx="834" cy="834" r="7"/><circle cx="754" cy="834" r="7"/>
+    <circle cx="190" cy="834" r="7"/><circle cx="834" cy="190" r="7"/>
+  </g>
+
+  <!-- 主体整体放大，以图标中心为基准 -->
+  <g transform="translate(496 523) scale(1.06) translate(-512 -512)">
+
+  <!-- 后面一层卡片：代表版本 / 图层 -->
+  <g transform="translate(38 -46) rotate(7 512 540)">
+    <rect x="262" y="320" width="500" height="410" rx="48" fill="#F5CDBC"/>
+  </g>
+
+  <!-- 主卡片：一张生成出来的设计稿 -->
+  <g transform="translate(0 -14) rotate(-5 512 540)" filter="url(#cardShadow)">
+    <rect x="262" y="320" width="500" height="410" rx="48" fill="#FFFFFF"/>
+    <!-- 顶栏 -->
+    <circle cx="318" cy="374" r="14" fill="#D97757"/>
+    <rect x="346" y="364" width="120" height="20" rx="10" fill="#F3D7CB"/>
+    <rect x="626" y="364" width="90" height="20" rx="10" fill="#F3D7CB"/>
+    <!-- 首屏大图 -->
+    <rect x="304" y="414" width="416" height="150" rx="26" fill="#E8906F"/>
+    <rect x="336" y="452" width="170" height="22" rx="11" fill="#FFFFFF" opacity="0.9"/>
+    <rect x="336" y="488" width="120" height="16" rx="8" fill="#FFFFFF" opacity="0.65"/>
+    <rect x="336" y="518" width="78" height="26" rx="13" fill="#FFFFFF"/>
+    <!-- 内容块 -->
+    <rect x="304" y="590" width="126" height="98" rx="20" fill="#F6E4DC"/>
+    <rect x="449" y="590" width="126" height="98" rx="20" fill="#F6E4DC"/>
+    <rect x="594" y="590" width="126" height="98" rx="20" fill="#F6E4DC"/>
+  </g>
+
+  </g>
+</svg>
