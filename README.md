@@ -58,7 +58,7 @@ open Package.swift          # 选择 DesignStudio scheme → Run
 open build/DesignStudio.app
 
 # 打包发布用的 DMG（通用二进制，输出到 dist/）
-./Scripts/release-dmg.sh 1.0.0
+./Scripts/release-dmg.sh 0.1.0
 
 # 运行单元测试
 swift test
@@ -156,8 +156,8 @@ Sources/DesignStudio
 推送 `v*` tag 会触发 GitHub Actions（`.github/workflows/release.yml`）：运行测试 → 按 Conventional Commits 生成更新说明 → 编译通用 DMG → 发布到 Releases。
 
 ```bash
-git tag v1.0.1
-git push origin v1.0.1
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 本地有 Developer ID Application 证书时，`release-dmg.sh` 会自动用它签名；设置 `NOTARY_PROFILE`（`xcrun notarytool store-credentials` 保存的凭据名）后还会提交公证。
