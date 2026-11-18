@@ -156,7 +156,7 @@ final class AppModel {
     func performUndo(redo: Bool) {
         let action = Selector(redo ? "redo:" : "undo:")
         let responder = NSApp.keyWindow?.firstResponder
-        if responder is NSTextView || activeSession == nil {
+        if responder is NSTextView || MarkdownContentView.contains(responder) || activeSession == nil {
             NSApp.sendAction(action, to: nil, from: nil)
             return
         }
@@ -194,7 +194,7 @@ final class AppModel {
 
     private func canvasOwnsKeyboard(_ s: ProjectSession) -> Bool {
         let responder = NSApp.keyWindow?.firstResponder
-        if responder is NSTextView { return false }
+        if responder is NSTextView || MarkdownContentView.contains(responder) { return false }
         if responder is WKWebView { return !s.isEditingText && !s.interactivePreview }
         return s.canvasFocused
     }

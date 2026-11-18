@@ -16,9 +16,16 @@ let package = Package(
     products: [
         .executable(name: "DesignStudio", targets: ["DesignStudio"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/swiftlang/swift-cmark.git", from: "0.9.0")
+    ],
     targets: [
         .executableTarget(
             name: "DesignStudio",
+            dependencies: [
+                .product(name: "cmark-gfm", package: "swift-cmark"),
+                .product(name: "cmark-gfm-extensions", package: "swift-cmark")
+            ],
             path: "Sources/DesignStudio",
             swiftSettings: appSettings
         ),

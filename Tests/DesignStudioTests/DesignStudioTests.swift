@@ -459,40 +459,6 @@ struct ProviderBrandTests {
     }
 }
 
-@Suite("聊天 Markdown")
-struct MarkdownBlockTests {
-    @Test func parsesParagraphsListsAndCode() {
-        let text = """
-        我做了三个页面。
-
-        - 可继续补一个成功页
-        - 计时页可加长按
-          调节时长
-        1. 第一步
-        2) 第二步
-        ## 小标题
-        ```
-        let a = 1
-        ```
-        """
-        let blocks = MarkdownBlock.parse(text)
-        #expect(blocks == [
-            .paragraph("我做了三个页面。"),
-            .bullet("可继续补一个成功页", level: 0),
-            .bullet("计时页可加长按 调节时长", level: 0),
-            .numbered("第一步", marker: "1.", level: 0),
-            .numbered("第二步", marker: "2.", level: 0),
-            .heading("小标题", level: 2),
-            .code("let a = 1")
-        ])
-    }
-
-    @Test func colorHexIsNotAHeading() {
-        #expect(MarkdownBlock.parse("#3D6BA3 是主色") == [.paragraph("#3D6BA3 是主色")])
-    }
-}
-
-
 @Suite("对话滚动跟随（布局变化）")
 struct ScrollFollowLayoutTests {
     @Test func contentResizeIsNotUserScroll() {

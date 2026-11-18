@@ -195,34 +195,29 @@ struct MessageView: View {
     }
 
     private var userBubble: some View {
-        HStack {
-            Spacer(minLength: 48)
-            VStack(alignment: .trailing, spacing: 6) {
-                if let target = message.target {
-                    MessageTargetChip(target: target) { session.reveal(target) }
+        VStack(alignment: .trailing, spacing: 6) {
+            if let target = message.target {
+                MessageTargetChip(target: target) { session.reveal(target) }
+            }
+            if !message.attachments.isEmpty {
+                AttachmentThumbs(attachments: message.attachments)
+            }
+            ForEach(message.comments) { c in
+                Label {
+                    Text("\(c.note)").font(.caption)
+                } icon: {
+                    Image(systemName: "scope")
                 }
-                if !message.attachments.isEmpty {
-                    AttachmentThumbs(attachments: message.attachments)
-                }
-                ForEach(message.comments) { c in
-                    Label {
-                        Text("\(c.note)").font(.caption)
-                    } icon: {
-                        Image(systemName: "scope")
-                    }
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(Color.primary.opacity(0.05), in: .capsule)
-                    .help(c.selector)
-                }
-                Text(message.text)
-                    .font(Theme.chatBody)
-                    .lineSpacing(3)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
-                    .background(Color.primary.opacity(0.06), in: .rect(cornerRadius: 18))
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(Color.primary.opacity(0.05), in: .capsule)
+                .help(c.selector)
+            }
+            if !message.text.isEmpty {
+                MarkdownText(message.text, style: .user)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.leading, 48)
     }
 
     private var isStreaming: Bool { session.streamingMessageID == message.id }
@@ -259,8 +254,6 @@ struct MessageView: View {
 
             if !display.isEmpty {
                 MarkdownText(display)
-                    .font(Theme.chatBody)
-                    .lineSpacing(3)
             }
 
             // 思考阶段由上面的「思考中…」表示，不再重复显示进度胶囊
@@ -468,10 +461,7 @@ private struct ThinkingSection: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
-                            MarkdownText(text.trimmed)
-                                .font(.body)
-                                .lineSpacing(3)
-                                .foregroundStyle(.secondary)
+                            MarkdownText(text, style: .thinking)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
                             Color.clear.frame(height: 1).id("thinkingEnd")

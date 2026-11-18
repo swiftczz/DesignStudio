@@ -1,77 +1,110 @@
 import Foundation
+import cmark_gfm
 
-/// 从模型回复中提取 HTML 设计稿
+/// 把生成的设计代码与对话 Markdown 分开。只识别顶层代码块或完整 HTML 文档。
 nonisolated enum HTMLExtractor {
-    private static func fenceRange(in text: String) -> Range<String.Index>? {
-        text.range(of: "```html", options: .caseInsensitive)
+    struct Artifact {
+        var info: String
+        var html: String
+        var complete: Bool
+        var range: Range<String.Index>
+    }
+
+    static func artifacts(in text: String) -> [Artifact] {
+        guard text.range(of: "html", options: .caseInsensitive) != nil,
+              text.contains("```") || text.contains("~~~") || text.contains("<") else { return [] }
+        return MarkdownDocument.withDocument(text) { root, _ in
+            let lines = text.split(omittingEmptySubsequences: false) { $0 == "\n" || $0 == "\r\n" || $0 == "\r" }
+            var artifacts: [Artifact] = []
+            var next = cmark_node_first_child(root)
+            while let node = next {
+                next = cmark_node_next(node)
+                let start = Int(cmark_node_get_start_line(node)) - 1
+                guard lines.indices.contains(start) else { continue }
+                let lower = lines[start].startIndex
+                if let last = artifacts.last, lower < last.range.upperBound { continue }
+
+                let type = cmark_node_get_type(node)
+                if type == CMARK_NODE_CODE_BLOCK {
+                    let end = Int(cmark_node_get_end_line(node)) - 1
+                    guard lines.indices.contains(end), start <= end else { continue }
+                    var length: Int32 = 0
+                    var offset: Int32 = 0
+                    var character: CChar = 0
+                    guard cmark_node_get_fenced(node, &length, &offset, &character) != 0,
+                          let fenceInfo = cmark_node_get_fence_info(node),
+                          let literal = cmark_node_get_literal(node) else { continue }
+                    let parts = String(cString: fenceInfo).split(maxSplits: 1, whereSeparator: \.isWhitespace)
+                    guard parts.first?.lowercased() == "html" else { continue }
+                    let info = parts.count == 2 ? String(parts[1]) : ""
+                    let html = String(cString: literal)
+                    let dimensions = ArtboardParser.parseInfo(info)
+                    guard ArtboardParser.isElementInfo(info) || dimensions.name != nil
+                            || dimensions.width != nil || dimensions.height != nil
+                            || startsHTMLDocument(html) else { continue }
+
+                    let fence = Character(UnicodeScalar(UInt8(bitPattern: character)))
+                    let closing = lines[end].drop(while: { $0 == " " || $0 == "\t" })
+                    let markers = closing.prefix(while: { $0 == fence })
+                    let complete = end > start && markers.count >= Int(length)
+                        && closing.dropFirst(markers.count).allSatisfy(\.isWhitespace)
+                    artifacts.append(Artifact(info: info, html: complete ? html.trimmed : html,
+                                              complete: complete, range: lower..<lines[end].endIndex))
+
+                } else if startsHTMLDocument(lines[start]) {
+                    let closing = text.range(of: "</html>", options: .caseInsensitive, range: lower..<text.endIndex)
+                    let upper = closing?.upperBound ?? text.endIndex
+                    artifacts.append(Artifact(info: "", html: String(text[lower..<upper]).trimmed,
+                                              complete: closing != nil, range: lower..<upper))
+                }
+            }
+            return artifacts
+        } ?? []
+    }
+
+    private static func startsHTMLDocument(_ text: some StringProtocol) -> Bool {
+        let prefix = text.drop(while: \.isWhitespace).prefix(15).lowercased()
+        return prefix.hasPrefix("<!doctype html") || prefix == "<html" || prefix.hasPrefix("<html>")
+            || prefix.hasPrefix("<html ") || prefix.hasPrefix("<html\t") || prefix.hasPrefix("<html\n")
     }
 
     static func fenceStarted(_ text: String) -> Bool {
-        fenceRange(in: text) != nil || text.range(of: "<!DOCTYPE html", options: .caseInsensitive) != nil
+        !artifacts(in: text).isEmpty
     }
 
-    /// 完整提取；代码块未闭合时返回 nil
     static func extract(from text: String) -> String? {
-        if let start = fenceRange(in: text) {
-            let afterTag = text[start.upperBound...]
-            guard let nl = afterTag.firstIndex(of: "\n") else { return nil }
-            let body = text[text.index(after: nl)...]
-            if let end = body.range(of: "\n```") {
-                let html = String(body[..<end.lowerBound]).trimmed
-                return html.isEmpty ? nil : html
-            }
-            return nil
-        }
-        // 没有代码块时，尝试直接截取完整文档
-        if let s = text.range(of: "<!DOCTYPE html", options: .caseInsensitive) ?? text.range(of: "<html", options: .caseInsensitive),
-           let e = text.range(of: "</html>", options: [.caseInsensitive, .backwards]),
-           e.lowerBound > s.lowerBound {
-            return String(text[s.lowerBound..<e.upperBound])
-        }
-        return nil
+        guard let first = artifacts(in: text).first, first.complete, !first.html.isEmpty else { return nil }
+        return first.html
     }
 
-    /// 流式过程中的部分 HTML（用于实时预览）
     static func partial(from text: String) -> String? {
-        if let full = extract(from: text) { return full }
-        if let start = fenceRange(in: text) {
-            let afterTag = text[start.upperBound...]
-            guard let nl = afterTag.firstIndex(of: "\n") else { return nil }
-            let body = String(text[text.index(after: nl)...])
-            return body.isEmpty ? nil : body
-        }
-        if let s = text.range(of: "<!DOCTYPE html", options: .caseInsensitive) ?? text.range(of: "<html", options: .caseInsensitive) {
-            return String(text[s.lowerBound...])
-        }
-        return nil
+        guard let first = artifacts(in: text).first, !first.html.isEmpty else { return nil }
+        return first.html
     }
 
-    /// 用于聊天区展示：去掉所有 HTML 代码块（多画板时有多个）
     static func conversationalText(_ text: String, placeholder: String = "") -> String {
-        var result = text
-        var removedFence = false
-        while let start = fenceRange(in: result) {
-            removedFence = true
-            let afterStart = result[start.upperBound...]
-            if let nl = afterStart.firstIndex(of: "\n"),
-               let end = result[result.index(after: nl)...].range(of: "\n```") {
-                result.replaceSubrange(start.lowerBound..<end.upperBound, with: placeholder)
-            } else {
-                result.replaceSubrange(start.lowerBound..<result.endIndex, with: placeholder)
-                break
-            }
+        let artifacts = artifacts(in: text)
+        guard !artifacts.isEmpty else { return trimmingBlankLines(text[...]) }
+
+        var pieces: [String] = []
+        var cursor = text.startIndex
+        let replacement = placeholder.trimmed
+        for artifact in artifacts {
+            let prose = trimmingBlankLines(text[cursor..<artifact.range.lowerBound])
+            if !prose.isEmpty { pieces.append(prose) }
+            if !replacement.isEmpty { pieces.append(replacement) }
+            cursor = artifact.range.upperBound
         }
-        if !removedFence, let s = result.range(of: "<!DOCTYPE html", options: .caseInsensitive) {
-            if let e = result.range(of: "</html>", options: [.caseInsensitive, .backwards]), e.lowerBound > s.lowerBound {
-                result.replaceSubrange(s.lowerBound..<e.upperBound, with: placeholder)
-            } else {
-                result.replaceSubrange(s.lowerBound..<result.endIndex, with: placeholder)
-            }
-        }
-        // 去掉代码块后前后的换行会叠在一起，连续空行合并成一个
-        result = result.replacingOccurrences(of: #"\n[ \t]*(?:\n[ \t]*){2,}"#, with: "\n\n",
-                                             options: .regularExpression)
-        return result.trimmed
+        let trailing = trimmingBlankLines(text[cursor...])
+        if !trailing.isEmpty { pieces.append(trailing) }
+        return pieces.joined(separator: "\n\n")
+    }
+
+    private static func trimmingBlankLines(_ text: Substring) -> String {
+        let lines = text.split(whereSeparator: \.isNewline)
+        guard let first = lines.first(where: { !$0.allSatisfy(\.isWhitespace) }),
+              let last = lines.last(where: { !$0.allSatisfy(\.isWhitespace) }) else { return "" }
+        return String(text[first.startIndex..<last.endIndex])
     }
 
     /// 流式过程中已写出的 HTML 总行数（用于进度提示）

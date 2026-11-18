@@ -9,48 +9,12 @@ import Foundation
 /// 支持多个代码块；最后一个未闭合的代码块会以 `complete == false` 返回（用于流式实时预览）。
 nonisolated enum ArtboardParser {
     static func parse(_ text: String) -> [ParsedArtboard] {
-        var result: [ParsedArtboard] = []
-        var cursor = text.startIndex
-        var sawElement = false
-
-        while let open = text.range(of: "```html", options: .caseInsensitive, range: cursor..<text.endIndex) {
-            // 信息串：```html 后面到行尾
-            guard let lineEnd = text[open.upperBound...].firstIndex(of: "\n") else { break }
-            let info = String(text[open.upperBound..<lineEnd])
-            let bodyStart = text.index(after: lineEnd)
-            let attrs = parseInfo(info)
-
-            // ```html element 是元素级修改，不是画板
-            if isElementInfo(info) {
-                sawElement = true
-                guard let close = text.range(of: "\n```", range: bodyStart..<text.endIndex) else { break }
-                cursor = close.upperBound
-                continue
-            }
-
-            if let close = text.range(of: "\n```", range: bodyStart..<text.endIndex) {
-                let html = String(text[bodyStart..<close.lowerBound]).trimmed
-                result.append(ParsedArtboard(name: attrs.name, width: attrs.width, height: attrs.height,
-                                             html: html, complete: true))
-                cursor = close.upperBound
-            } else {
-                let html = String(text[bodyStart...])
-                result.append(ParsedArtboard(name: attrs.name, width: attrs.width, height: attrs.height,
-                                             html: html, complete: false))
-                cursor = text.endIndex
-            }
+        HTMLExtractor.artifacts(in: text).compactMap { artifact in
+            guard !isElementInfo(artifact.info) else { return nil }
+            let attributes = parseInfo(artifact.info)
+            return ParsedArtboard(name: attributes.name, width: attributes.width, height: attributes.height,
+                                  html: artifact.html, complete: artifact.complete)
         }
-
-        // 没有代码块时，退化为直接截取完整文档
-        if result.isEmpty, !sawElement,
-           let s = text.range(of: "<!DOCTYPE html", options: .caseInsensitive) ?? text.range(of: "<html", options: .caseInsensitive) {
-            if let e = text.range(of: "</html>", options: [.caseInsensitive, .backwards]), e.lowerBound > s.lowerBound {
-                result.append(ParsedArtboard(html: String(text[s.lowerBound..<e.upperBound]), complete: true))
-            } else {
-                result.append(ParsedArtboard(html: String(text[s.lowerBound...]), complete: false))
-            }
-        }
-        return result
     }
 
     /// 元素级修改代码块：```html element
@@ -61,21 +25,9 @@ nonisolated enum ArtboardParser {
 
     /// 取回复中的第一个 ```html element 代码块（元素级修改的结果）
     static func element(_ text: String) -> (html: String, complete: Bool, isPatch: Bool)? {
-        var cursor = text.startIndex
-        while let open = text.range(of: "```html", options: .caseInsensitive, range: cursor..<text.endIndex) {
-            guard let lineEnd = text[open.upperBound...].firstIndex(of: "\n") else { return nil }
-            let bodyStart = text.index(after: lineEnd)
-            let close = text.range(of: "\n```", range: bodyStart..<text.endIndex)
-            let info = String(text[open.upperBound..<lineEnd])
-            if isElementInfo(info) {
-                let isPatch = info.split(whereSeparator: \.isWhitespace).map { $0.lowercased() } == ["element", "patch"]
-                guard let close else { return (String(text[bodyStart...]), false, isPatch) }
-                return (String(text[bodyStart..<close.lowerBound]).trimmed, true, isPatch)
-            }
-            guard let close else { return nil }
-            cursor = close.upperBound
-        }
-        return nil
+        guard let artifact = HTMLExtractor.artifacts(in: text).first(where: { isElementInfo($0.info) }) else { return nil }
+        let isPatch = artifact.info.split(whereSeparator: \.isWhitespace).map { $0.lowercased() } == ["element", "patch"]
+        return (artifact.html, artifact.complete, isPatch)
     }
 
     /// 解析 `artboard="名称" width=390 height=844`（也接受 name= / title=、单引号）
