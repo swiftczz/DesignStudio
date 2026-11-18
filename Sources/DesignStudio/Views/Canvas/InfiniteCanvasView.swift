@@ -252,6 +252,12 @@ private struct ArtboardFrame: View {
 
     private let headerHeight: CGFloat = 26
 
+    private var selectedElementIDs: [Int] {
+        guard let selection = session.selection, selection.artboardID == artboard.id,
+              let id = selection.elementID else { return [] }
+        return session.multiSelection.count > 1 ? session.multiSelection.map(\.id) : [id]
+    }
+
     var body: some View {
         let z = session.zoom
         let origin = session.viewPoint(drag.frame(for: artboard).origin)
@@ -266,7 +272,8 @@ private struct ArtboardFrame: View {
             header(isSelected: isSelected)
                 .frame(width: width, height: headerHeight - 6, alignment: .leading)
 
-            ArtboardWebView(artboard: artboard, zoom: z, mode: session.editorMode(for: artboard.id), session: session)
+            ArtboardWebView(artboard: artboard, zoom: z, mode: session.editorMode(for: artboard.id),
+                            selectedElementIDs: selectedElementIDs, session: session)
                 .frame(width: artboard.width * z, height: artboard.height * z)
                 .background(.white)
                 .clipShape(.rect(cornerRadius: 2))

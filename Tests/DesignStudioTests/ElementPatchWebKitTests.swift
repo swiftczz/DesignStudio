@@ -66,6 +66,65 @@ struct ElementPatchWebKitTests {
         }
     }
 
+    @MainActor @Test func selectionTracksTheTransformOfAnAncestor() async throws {
+        let html = HTMLAnnotator.annotate("""
+            <!doctype html><style>body { margin: 0; } section { margin-top: 40px; }</style>
+            <section><div>Card content</div><p>Another selected element</p></section>
+            """).html
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 360, height: 280))
+        let window = NSWindow(contentRect: web.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView?.addSubview(web)
+        window.orderBack(nil)
+        defer { window.orderOut(nil) }
+        let navigation = NavigationWaiter()
+        web.navigationDelegate = navigation
+        await withCheckedContinuation { continuation in
+            navigation.loaded = continuation
+            web.loadHTMLString(html, baseURL: nil)
+        }
+        _ = try await web.evaluateJavaScript(EditorScript.editor)
+        let result = try await web.evaluateJavaScript("""
+            (() => {
+                const ids = ['div', 'p'].map(tag => +document.querySelector(tag).getAttribute('data-ds-id'));
+                const reports = [];
+                const callbacks = new Map();
+                let nextFrame = 0;
+                window.requestAnimationFrame = callback => {
+                    callbacks.set(++nextFrame, callback);
+                    return nextFrame;
+                };
+                window.cancelAnimationFrame = frame => callbacks.delete(frame);
+                window.webkit = {messageHandlers: {ds: {postMessage(message) {
+                    const update = JSON.parse(message);
+                    if (update.type === 'selectionGeometry') reports.push(update.geometry.map(entry => entry.rect.y));
+                }}}};
+                function renderFrame() {
+                    const scheduled = Array.from(callbacks.values());
+                    callbacks.clear();
+                    scheduled.forEach(callback => callback());
+                }
+                const ancestor = document.querySelector('section');
+                window.__ds.trackSelection(ids);
+                renderFrame();
+                ancestor.style.transform = 'translateY(-4px)';
+                renderFrame();
+                ancestor.style.transform = 'translateY(-8px)';
+                renderFrame();
+                renderFrame();
+                window.__ds.setMode('off');
+                ancestor.style.transform = 'none';
+                renderFrame();
+                window.__ds.setMode('select');
+                renderFrame();
+                window.__ds.trackSelection([]);
+                renderFrame();
+                return callbacks.size === 0 && reports.length === 4 && reports.every((report, i) =>
+                    report.length === ids.length && report.every((y, j) => y === reports[0][j] - [0, 4, 8, 0][i]));
+            })()
+            """)
+        #expect(result as? Bool == true)
+    }
+
     @MainActor private final class NavigationWaiter: NSObject, WKNavigationDelegate {
         var loaded: CheckedContinuation<Void, Never>?
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

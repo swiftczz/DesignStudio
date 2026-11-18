@@ -27,6 +27,7 @@ nonisolated enum EditorScript {
       var selectedIds = [];          // ⇧ 点击多选时的全部元素（最后一个为主选中，与 selectedId 相同）
       var editing = null;            // 正在行内编辑文字的元素
       var drag = null;               // 按下后可能开始的拖动：move（绝对定位）/ offset（⌥ 自由移动）/ reorder（流式布局里调整顺序）
+      var trackedIds = [], geometryFrame = null, lastGeometry = null;
 
       function post(m){ try { window.webkit.messageHandlers.ds.postMessage(JSON.stringify(m)); } catch(_){} }
       function live(id){ return id == null ? null : document.querySelector('[' + ATTR + '="' + id + '"]'); }
@@ -211,6 +212,32 @@ nonisolated enum EditorScript {
         }
         var r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height };
       }
+
+      // 点击只是选中的起点。悬停过渡、祖先的变换和网页重新排版都会继续改变边界。
+      function updateTrackedGeometry(){
+        geometryFrame = null;
+        if (mode === 'off' || !trackedIds.length) return;
+        if (drag && drag.started) {
+          lastGeometry = null;
+        } else {
+          var rects = trackedIds.map(function(id){
+            var el = live(id);
+            return el ? { id: id, rect: rectOf(el) } : null;
+          }).filter(Boolean);
+          var geometry = JSON.stringify(rects);
+          if (geometry !== lastGeometry) {
+            lastGeometry = geometry;
+            post({ type: 'selectionGeometry', geometry: rects });
+          }
+        }
+        geometryFrame = requestAnimationFrame(updateTrackedGeometry);
+      }
+      function trackSelection(ids){
+        trackedIds = ids;
+        lastGeometry = null;
+        if (geometryFrame !== null) cancelAnimationFrame(geometryFrame);
+        geometryFrame = mode !== 'off' && ids.length ? requestAnimationFrame(updateTrackedGeometry) : null;
+      }
       function isGroup(el){ return !!el && el.hasAttribute('data-group'); }
       // 多选：主选中变了（单击、脚本编辑）时，多选集合回到只有它一个
       function syncIds(){
@@ -362,6 +389,7 @@ nonisolated enum EditorScript {
         mode = m;
         document.documentElement.classList.toggle('__ds-editing', m !== 'off');
         if (m === 'off') { hoverId = null; }
+        trackSelection(trackedIds);
       }
       var css = document.createElement('style');
       css.id = '__ds-editor-style';
@@ -597,6 +625,7 @@ nonisolated enum EditorScript {
           return JSON.stringify({ tree: tree() });
         },
         setMode: setMode,
+        trackSelection: trackSelection,
         tree: function(){ return JSON.stringify(tree()); },
         props: function(id){ selectedId = id; selectedIds = id != null ? [id] : []; return JSON.stringify(props(id)); },
         rect: function(id){ var el = live(id); return el ? JSON.stringify(rectOf(el)) : null; },

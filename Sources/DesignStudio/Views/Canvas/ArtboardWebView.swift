@@ -170,12 +170,13 @@ struct ArtboardWebView: NSViewRepresentable {
     let artboard: Artboard
     let zoom: Double
     let mode: EditorMode
+    let selectedElementIDs: [Int]
     let session: ProjectSession
 
     static let baseURL = URL(string: "https://canvas.designstudio.local/")!
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(handle: session.handle(for: artboard.id), session: session)
+        Coordinator(handle: session.handle(for: artboard.id), session: session, selectedElementIDs: selectedElementIDs)
     }
 
     func makeNSView(context: Context) -> ArtboardViewport {
@@ -218,6 +219,7 @@ struct ArtboardWebView: NSViewRepresentable {
             c.handle.mode = mode
             c.handle.run("window.__ds && window.__ds.setMode(m)", ["m": mode.rawValue])
         }
+        c.trackSelection(selectedElementIDs)
     }
 
     static func dismantleNSView(_ viewport: ArtboardViewport, coordinator: Coordinator) {
@@ -233,10 +235,18 @@ struct ArtboardWebView: NSViewRepresentable {
         weak var session: ProjectSession?
         private var annotated = ""
         private var initialized = false
+        private var selectedElementIDs: [Int]
 
-        init(handle: ArtboardHandle, session: ProjectSession) {
+        init(handle: ArtboardHandle, session: ProjectSession, selectedElementIDs: [Int]) {
             self.handle = handle
             self.session = session
+            self.selectedElementIDs = selectedElementIDs
+        }
+
+        func trackSelection(_ ids: [Int]) {
+            guard selectedElementIDs != ids else { return }
+            selectedElementIDs = ids
+            handle.run("window.__ds.trackSelection(ids)", ["ids": ids])
         }
 
         func load(_ html: String, in web: WKWebView) {
@@ -259,8 +269,11 @@ struct ArtboardWebView: NSViewRepresentable {
             Task { [weak self] in
                 guard let self else { return }
                 struct InitResult: Decodable { var tree: [ElementNode] }
-                let r = await self.handle.decode(InitResult.self, "return window.__ds.init(s, m)",
-                                                 ["s": source, "m": mode.rawValue])
+                let r = await self.handle.decode(InitResult.self, """
+                    const result = window.__ds.init(s, m);
+                    window.__ds.trackSelection(ids);
+                    return result;
+                    """, ["s": source, "m": mode.rawValue, "ids": self.selectedElementIDs])
                 self.session?.artboardDidLoad(id, tree: r?.tree ?? [])
             }
         }

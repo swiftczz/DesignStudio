@@ -386,9 +386,24 @@ final class ProjectSession {
                 selectedProps = nil
             }
         case "dragging":
-            if let rect = msg.rect, var p = selectedProps, p.id == msg.id {
+            if selection?.artboardID == artboardID, let rect = msg.rect, var p = selectedProps, p.id == msg.id {
                 p.rect = rect
                 selectedProps = p
+            }
+        case "selectionGeometry":
+            guard editorMode(for: artboardID) != .off, selection?.artboardID == artboardID,
+                  let geometry = msg.geometry else { return }
+            if var props = selectedProps, props.id == selection?.elementID,
+               let rect = geometry.first(where: { $0.id == props.id })?.rect, props.rect != rect {
+                props.rect = rect
+                selectedProps = props
+                if pendingComment?.artboardID == artboardID, pendingComment?.props.id == props.id {
+                    pendingComment?.props.rect = rect
+                }
+            }
+            if multiSelection.count > 1 {
+                let updated = multiSelection.map { element in geometry.first { $0.id == element.id } ?? element }
+                if updated != multiSelection { multiSelection = updated }
             }
         case "changed":
             isEditingText = false

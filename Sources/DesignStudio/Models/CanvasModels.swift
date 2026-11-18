@@ -191,6 +191,8 @@ nonisolated struct EditorMessage: Decodable, Sendable {
     var info: ContextInfo?
     /// ⇧ 点击多选时的全部元素（少于 2 个时为空）
     var multi: [SelectedElement]?
+    /// 选中元素在当前网页渲染帧中的边界。
+    var geometry: [SelectedElement]?
 }
 
 /// 右键菜单需要的元素信息（决定哪些菜单项可用）
