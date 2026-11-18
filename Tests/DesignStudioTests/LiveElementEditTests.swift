@@ -57,3 +57,31 @@ struct LiveElementEditTests {
         #expect(block.html.contains("晨间唤醒"))
     }
 }
+
+/// 手动运行：DS_LIVE=1 swift test --filter LiveMedium（会真实调用本机的 agy）
+/// 检查模型能按需求判断设计的媒介，而不是一律做成手机尺寸
+@Suite("Live medium", .enabled(if: ProcessInfo.processInfo.environment["DS_LIVE"] == "1"))
+struct LiveMediumTests {
+    @MainActor @Test(arguments: [
+        ("做一个面向独立开发者的项目管理 SaaS 官网首页", 1440.0),
+        ("做一个电商后台的订单管理页面", 1440.0),
+        ("做一个记账 App 的首页和记一笔两个页面", 390.0),
+        ("做一份季度业务汇报的幻灯片，4 页就行", 1920.0)
+    ])
+    func picksMedium(prompt: String, expectedWidth: Double) async throws {
+        var profile = ProviderProfile.antigravity()
+        profile.model = "gemini-3.8-flash-low"
+        let project = Project(name: "t", kind: .prototype)
+        let req = DesignPrompt.makeRequest(project: project, designSystem: nil,
+                                           newMessage: ChatMessage(role: .user, text: prompt),
+                                           profile: profile)
+        let llm = try ProviderFactory.make(profile)
+        var text = ""
+        for try await e in llm.stream(req) { if case .text(let t) = e { text += t } }
+        let boards = ArtboardParser.parse(text)
+        let intro = text.components(separatedBy: "```").first?.trimmed ?? ""
+        print("PROMPT \(prompt)\n  INTRO \(intro.prefix(160))\n  BOARDS \(boards.map { "\($0.name ?? "?") \(Int($0.width ?? 0))×\(Int($0.height ?? 0))" })")
+        #expect(!boards.isEmpty)
+        #expect(boards.allSatisfy { $0.width == expectedWidth }, "\(prompt)")
+    }
+}

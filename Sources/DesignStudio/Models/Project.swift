@@ -32,7 +32,7 @@ nonisolated enum ProjectKind: String, Codable, CaseIterable, Identifiable, Senda
 
     var placeholder: String {
         switch self {
-        case .prototype: "例如：一个记账 App 的首页、记一笔和月度报表三个页面，可以点击切换"
+        case .prototype: "描述你想设计的东西，例如：独立开发者工具的官网首页、记账 App 的三个页面、季度业务汇报幻灯片…"
         case .slides: "例如：10 页的产品发布会演示，主题是 AI 笔记应用的年度更新"
         case .landing: "例如：一款面向独立开发者的文档协作工具的官网首页"
         case .wireframe: "例如：电商 App 下单流程的低保真线框图"
@@ -60,12 +60,30 @@ nonisolated enum ProjectKind: String, Codable, CaseIterable, Identifiable, Senda
         switch self {
         case .prototype:
             """
-            Interactive product design. Design each key screen or state as its OWN artboard (default 390×844 mobile; \
-            use 1440×900 when the user asks for desktop / web). Typically 2–5 artboards, e.g. home, detail, form, \
-            empty / success states. Each artboard shows exactly one screen filling the whole artboard (status area, \
-            content, bottom navigation if relevant). In-screen interactions (tabs, toggles, inputs) may use vanilla JS. \
-            Use realistic data and keep design tokens identical across artboards. Never put several screens side by \
-            side inside one wide artboard — e.g. "three pages" means three separate 390×844 artboards.
+            First work out WHAT the user wants to design, then choose the artboard size for that medium. Do not \
+            assume a phone app — read the request carefully:
+            - Mobile app (App, iOS, Android, 小程序, "手机上"): one artboard per screen, 390×844. Tablet app: 1180×820.
+            - Website (官网, landing page, 落地页, 网站, 博客, 作品集, marketing / product page): desktop web, width 1440. \
+            A scrolling page is ONE artboard per page whose height fits the whole page (typically 2400–5000) so the \
+            full page is visible on the canvas; add a 390-wide mobile version only if the user asks for responsive.
+            - Web app / SaaS / dashboard / admin / 后台 / 管理系统 / 控制台 / CRM / internal tool: one artboard per \
+            screen at 1440×900 (app shell with sidebar or top bar; panels scroll inside).
+            - Desktop app (macOS / Windows software, 桌面客户端): 1280×800 window content.
+            - Slides / presentation / PPT / 演示 / 汇报 / 路演 / deck: every slide is its OWN artboard of exactly \
+            1920×1080, 6–12 slides by default, names like "01 封面", "02 问题"; no navigation code or slide counters.
+            - Poster / social graphic / 海报 / 封面 / 朋友圈 / 小红书: one artboard, 1080×1350 (or 1080×1920 for \
+            stories, 1080×1080 square) unless a size is given. Email: 600 wide. Other formats: pick the real-world size.
+            - If the user gives sizes, devices or a platform, follow them exactly.
+            - If the medium is genuinely unclear, pick the most plausible one from the wording and say which medium \
+            and size you chose in your opening sentence.
+            - When modifying an existing design, keep the medium and artboard sizes already on the canvas unless the \
+            user asks to change them; new screens match the existing artboards.
+
+            Design each key screen, page, state or slide as its OWN artboard — typically 2–5 for products. Each \
+            artboard shows exactly one screen filling the whole artboard. Never put several screens or slides side by \
+            side inside one wide artboard — e.g. "three pages" means three separate artboards. In-screen interactions \
+            (tabs, toggles, inputs, menus) may use vanilla JS. Use realistic data and keep design tokens identical \
+            across artboards.
             """
         case .slides:
             """

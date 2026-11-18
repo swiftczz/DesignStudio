@@ -95,7 +95,8 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
         let pageIndex = pageID.flatMap { id in pages.firstIndex { $0.id == id } } ?? 0
         var page = pages[pageIndex]
         var changed: [UUID] = []
-        let defaultSize = kind.artboardSize
+        // 模型没给尺寸时沿用页面上已有画板的尺寸（同一个设计的平台一致），空页面才用类型的默认尺寸
+        let defaultSize = page.artboards.last.map { CGSize(width: $0.width, height: $0.height) } ?? kind.artboardSize
 
         for (n, out) in outputs.enumerated() {
             let html = out.html.trimmed
