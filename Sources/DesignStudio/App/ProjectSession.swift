@@ -848,6 +848,20 @@ final class ProjectSession {
         DispatchQueue.main.async { [weak self] in self?.zoomToFit() }
     }
 
+    var canRearrangeArtboards: Bool {
+        isEditable && !isGenerating && (document.page(currentPageID)?.artboards.count ?? 0) > 1
+    }
+
+    func rearrangeArtboards() {
+        guard canRearrangeArtboards, let pageID = document.page(currentPageID)?.id else { return }
+        commit { doc in
+            if let index = doc.pages.firstIndex(where: { $0.id == pageID }) {
+                doc.pages[index].rearrangeArtboards()
+            }
+        }
+        zoomToFit()
+    }
+
     // MARK: - 提交 / 撤销
 
     /// 修改文档：记录撤销点并保存到项目

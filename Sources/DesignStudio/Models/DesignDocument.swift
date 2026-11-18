@@ -77,6 +77,11 @@ nonisolated struct DesignPage: Codable, Identifiable, Hashable, Sendable {
     fileprivate static func matchesGeneratedLayout(_ artboards: [Artboard], from origin: CGPoint) -> Bool {
         zip(artboards, generatedOrigins(for: artboards, from: origin)).allSatisfy { $0.frame.origin == $1 }
     }
+
+    mutating func rearrangeArtboards() {
+        guard let bounds, artboards.count > 1 else { return }
+        arrangeArtboards(at: Array(artboards.indices), from: bounds.origin)
+    }
 }
 
 nonisolated struct DesignDocument: Codable, Hashable, Sendable {
@@ -198,7 +203,11 @@ private extension DesignPage {
 
         let positions = artboards.indices.filter { !fixedIDs.contains(artboards[$0].id) }
         let fixedPage = DesignPage(name: name, artboards: artboards.filter { fixedIDs.contains($0.id) })
-        let origins = Self.generatedOrigins(for: positions.map { artboards[$0] }, from: fixedPage.generatedRowBelow)
+        arrangeArtboards(at: positions, from: fixedPage.generatedRowBelow)
+    }
+
+    nonisolated mutating func arrangeArtboards(at positions: [Int], from origin: CGPoint) {
+        let origins = Self.generatedOrigins(for: positions.map { artboards[$0] }, from: origin)
         for (index, origin) in zip(positions, origins) {
             artboards[index].x = origin.x
             artboards[index].y = origin.y

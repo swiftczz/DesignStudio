@@ -218,6 +218,24 @@ struct ArtboardTests {
         #expect(boards.map(\.y) == [0, 0, 1400, 1400, 2500, 2500, 3600, 3600])
     }
 
+    @Test func rearrangesSavedArtboardsWithoutChangingTheirContent() {
+        let original = (0..<8).map { index in
+            Artboard(name: "页面 \(index)", html: "画板 \(index)", x: -200 + Double(index) * 1520, y: 50,
+                     width: 1440, height: 900)
+        }
+        var page = DesignPage(name: "旧页面", artboards: original)
+        page.rearrangeArtboards()
+
+        #expect(page.artboards.map(\.x) == [-200, 1320, -200, 1320, -200, 1320, -200, 1320])
+        #expect(page.artboards.map(\.y) == [50, 50, 1150, 1150, 2250, 2250, 3350, 3350])
+        for (before, after) in zip(original, page.artboards) {
+            var restored = after
+            restored.x = before.x
+            restored.y = before.y
+            #expect(restored == before)
+        }
+    }
+
     @Test func fourPortraitsBalanceAcrossTwoRowsDuringGeneration() {
         var doc = DesignDocument()
         let mobile = (1...5).map {

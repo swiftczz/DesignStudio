@@ -511,7 +511,7 @@ private struct CanvasTopLeftBar: View {
     }
 }
 
-/// 页面切换：点开是与画布风格一致的弹出面板（页面列表 + 新建页面）
+/// 页面切换与画板排列菜单
 private struct PagePicker: View {
     @Bindable var session: ProjectSession
     @State private var isOpen = false
@@ -541,6 +541,7 @@ private struct PageList: View {
     @Bindable var session: ProjectSession
     let dismiss: () -> Void
     @State private var hovered: UUID?
+    @State private var hoveringArrange = false
     @State private var hoveringNew = false
     @State private var renamingID: UUID?
     @State private var newName = ""
@@ -560,6 +561,22 @@ private struct PageList: View {
             }
 
             Divider().padding(.vertical, 4).padding(.horizontal, 6)
+
+            Button {
+                session.rearrangeArtboards()
+                dismiss()
+            } label: {
+                Label("重新排列画板", systemImage: "square.grid.2x2")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(hoveringArrange && session.canRearrangeArtboards ? Color.primary.opacity(0.06) : .clear,
+                                in: .rect(cornerRadius: 8))
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .onHover { hoveringArrange = $0 }
+            .disabled(!session.canRearrangeArtboards)
 
             Button {
                 session.addPage()
