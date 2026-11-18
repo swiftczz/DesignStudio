@@ -206,6 +206,50 @@ struct ArtboardTests {
         #expect(doc.pages[0].artboards[1].height == 700)
     }
 
+    @Test func generatedArtboardsWrapInOrder() {
+        var doc = DesignDocument()
+        let desktop = (1...8).map {
+            ParsedArtboard(name: "页面 \($0)", width: 1440, height: $0 == 2 ? 1200 : 900, html: "page", complete: true)
+        }
+        let ids = doc.merge(desktop, into: nil, kind: .prototype)
+        let boards = doc.allArtboards
+        #expect(boards.map(\.id) == ids)
+        #expect(boards.map(\.x) == [0, 1520, 0, 1520, 0, 1520, 0, 1520])
+        #expect(boards.map(\.y) == [0, 0, 1400, 1400, 2500, 2500, 3600, 3600])
+    }
+
+    @Test func fourPortraitsBalanceAcrossTwoRowsDuringGeneration() {
+        var doc = DesignDocument()
+        let mobile = (1...5).map {
+            ParsedArtboard(name: "页面 \($0)", width: 390, height: 844, html: "page", complete: true)
+        }
+        let firstIDs = doc.merge(Array(mobile.prefix(3)), into: nil, kind: .prototype)
+        #expect(doc.allArtboards.map(\.y) == [0, 0, 0])
+
+        doc.merge(Array(mobile.prefix(4)), into: nil, kind: .prototype, previewArtboardIDs: Set(firstIDs))
+        #expect(doc.allArtboards.map(\.x) == [0, 470, 0, 470])
+        #expect(doc.allArtboards.map(\.y) == [0, 0, 1044, 1044])
+        #expect(Array(doc.allArtboards.prefix(3)).map(\.id) == firstIDs)
+
+        doc.merge(mobile, into: nil, kind: .prototype)
+        #expect(doc.allArtboards.map(\.x) == [0, 470, 940, 0, 470])
+        #expect(doc.allArtboards.map(\.y) == [0, 0, 0, 1044, 1044])
+    }
+
+    @Test func generatedRowsRespectMixedOrientationsAndExistingPositions() {
+        let fixed = Artboard(name: "已移动", html: "old", x: -500, y: 50, width: 390, height: 844)
+        var doc = DesignDocument(pages: [DesignPage(name: "页面 1", artboards: [fixed])])
+        let widths: [Double] = [390, 1440, 390, 390, 390]
+        let outputs = widths.enumerated().map { index, width in
+            ParsedArtboard(name: "新页面 \(index)", width: width, height: 900, html: "page", complete: true)
+        }
+        let previewIDs = doc.merge(Array(outputs.prefix(3)), into: nil, kind: .prototype)
+        doc.merge(outputs, into: nil, kind: .prototype, previewArtboardIDs: Set(previewIDs))
+        #expect(doc.allArtboards.first == fixed)
+        #expect(doc.allArtboards.map(\.x) == [-500, -500, -30, -500, -30, 440])
+        #expect(doc.allArtboards.map(\.y) == [50, 1094, 1094, 2194, 2194, 2194])
+    }
+
     @Test func legacyProjectMigrates() {
         var project = Project(name: "旧项目", kind: .slides)
         project.versions = [DesignVersion(number: 1, html: "<html></html>", summary: "v1")]

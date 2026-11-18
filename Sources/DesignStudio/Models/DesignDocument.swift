@@ -18,6 +18,9 @@ nonisolated struct Artboard: Codable, Identifiable, Hashable, Sendable {
 }
 
 nonisolated struct DesignPage: Codable, Identifiable, Hashable, Sendable {
+    private static let artboardColumnGap: Double = 80
+    private static let artboardRowGap: Double = 200
+
     var id = UUID()
     var name: String
     var artboards: [Artboard] = []
@@ -38,6 +41,41 @@ nonisolated struct DesignPage: Codable, Identifiable, Hashable, Sendable {
     func artboard(named name: String) -> Artboard? {
         let key = name.trimmed.lowercased()
         return artboards.first { $0.name.trimmed.lowercased() == key }
+    }
+
+    /// 自动排列从左到右、从上到下，换行时给下一排的标题留出空间。
+    fileprivate static func generatedOrigins(for artboards: [Artboard], from origin: CGPoint) -> [CGPoint] {
+        let fourPortraits = artboards.count == 4 && artboards.allSatisfy { $0.height > $0.width }
+        var x = origin.x
+        var y = origin.y
+        var rowHeight: Double = 0
+        var rowCount = 0
+        var rowLimit = 3
+        return artboards.map { board in
+            let limit = board.height > board.width && !fourPortraits ? 3 : 2
+            if rowCount >= min(rowLimit, limit) {
+                x = origin.x
+                y += rowHeight + artboardRowGap
+                rowHeight = 0
+                rowCount = 0
+                rowLimit = 3
+            }
+            let position = CGPoint(x: x, y: y)
+            x += board.width + artboardColumnGap
+            rowHeight = max(rowHeight, board.height)
+            rowCount += 1
+            rowLimit = min(rowLimit, limit)
+            return position
+        }
+    }
+
+    fileprivate var generatedRowBelow: CGPoint {
+        guard let bounds else { return .zero }
+        return CGPoint(x: bounds.minX, y: bounds.maxY + Self.artboardRowGap)
+    }
+
+    fileprivate static func matchesGeneratedLayout(_ artboards: [Artboard], from origin: CGPoint) -> Bool {
+        zip(artboards, generatedOrigins(for: artboards, from: origin)).allSatisfy { $0.frame.origin == $1 }
     }
 }
 
@@ -86,14 +124,15 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
         return DesignDocument(pages: [DesignPage(name: "页面 1", artboards: [board])])
     }
 
-    /// 把模型输出的画板合并进指定页面：同名画板替换内容，新名字追加在右侧
+    /// 把模型输出的画板合并进指定页面：同名画板替换内容，新增画板自动分行。
     /// - Returns: 被修改或新增的画板 ID
     @discardableResult
     mutating func merge(_ outputs: [ParsedArtboard], into pageID: UUID?, kind: ProjectKind,
-                        fallbackTarget: UUID? = nil) -> [UUID] {
+                        fallbackTarget: UUID? = nil, previewArtboardIDs: Set<UUID> = []) -> [UUID] {
         guard !outputs.isEmpty else { return [] }
         let pageIndex = pageID.flatMap { id in pages.firstIndex { $0.id == id } } ?? 0
-        var page = pages[pageIndex]
+        let previous = pages[pageIndex]
+        var page = previous
         var changed: [UUID] = []
         // 模型没给尺寸时沿用页面上已有画板的尺寸（同一个设计的平台一致），空页面才用类型的默认尺寸
         let defaultSize = page.artboards.last.map { CGSize(width: $0.width, height: $0.height) } ?? kind.artboardSize
@@ -124,14 +163,16 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
                 if let h = out.height { page.artboards[i].height = h }
                 changed.append(page.artboards[i].id)
             } else {
-                let origin = page.nextArtboardOrigin()
                 let name = out.name ?? Self.defaultName(kind: kind, index: page.artboards.count + 1 + n)
-                let board = Artboard(name: name, html: html, x: origin.x, y: origin.y,
+                let board = Artboard(name: name, html: html,
                                      width: out.width ?? defaultSize.width,
                                      height: out.height ?? defaultSize.height)
                 page.artboards.append(board)
                 changed.append(board.id)
             }
+        }
+        if page.artboards.count > previous.artboards.count {
+            page.arrangeGeneratedArtboards(previous: previous, previewArtboardIDs: previewArtboardIDs)
         }
         pages[pageIndex] = page
         return changed
@@ -139,6 +180,29 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
 
     static func defaultName(kind: ProjectKind, index: Int) -> String {
         (kind == .slides ? "幻灯片 " : "画板 ") + String(index)
+    }
+}
+
+private extension DesignPage {
+    nonisolated mutating func arrangeGeneratedArtboards(previous: DesignPage, previewArtboardIDs: Set<UUID>) {
+        var fixedIDs = Set<UUID>()
+        if !Self.matchesGeneratedLayout(previous.artboards, from: .zero) {
+            let fixed = previous.artboards.filter { !previewArtboardIDs.contains($0.id) }
+            let previews = previous.artboards.filter { previewArtboardIDs.contains($0.id) }
+            let fixedPage = DesignPage(name: name, artboards: fixed)
+            // 预览画板也能手动拖动。只有位置仍符合自动排列时才重新排它们。
+            let preserved = Self.matchesGeneratedLayout(previews, from: fixedPage.generatedRowBelow)
+                ? fixed : previous.artboards
+            fixedIDs = Set(preserved.map(\.id))
+        }
+
+        let positions = artboards.indices.filter { !fixedIDs.contains(artboards[$0].id) }
+        let fixedPage = DesignPage(name: name, artboards: artboards.filter { fixedIDs.contains($0.id) })
+        let origins = Self.generatedOrigins(for: positions.map { artboards[$0] }, from: fixedPage.generatedRowBelow)
+        for (index, origin) in zip(positions, origins) {
+            artboards[index].x = origin.x
+            artboards[index].y = origin.y
+        }
     }
 }
 

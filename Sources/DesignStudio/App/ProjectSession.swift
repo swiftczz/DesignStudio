@@ -1152,13 +1152,19 @@ final class ProjectSession {
         }
     }
 
+    private var generatedPreviewIDs: Set<UUID> {
+        let savedIDs = document.page(generationPageID)?.artboards.map(\.id) ?? []
+        return streamingArtboardIDs.subtracting(savedIDs)
+    }
+
     private func updateLivePreview() {
         guard generationElement == nil else { return }
         let parsed = ArtboardParser.previewable(streamingText)
         guard !parsed.isEmpty else { return }
         var live = liveDocument ?? document
         let before = live.page(generationPageID)?.artboards.count ?? 0
-        let changed = live.merge(parsed, into: generationPageID, kind: kind, fallbackTarget: generationTarget)
+        let changed = live.merge(parsed, into: generationPageID, kind: kind, fallbackTarget: generationTarget,
+                                 previewArtboardIDs: generatedPreviewIDs)
         guard !changed.isEmpty else { return }
         liveDocument = live
         streamingArtboardIDs.formUnion(changed)
@@ -1203,7 +1209,8 @@ final class ProjectSession {
         if error == nil, !outputs.isEmpty {
             // 保留已预览画板的 ID。中途取消时，从原文档合并完整结果，避免提交半张画板。
             var merged = outputs.count == parsed.count ? (liveDocument ?? document) : document
-            merged.merge(outputs, into: generationPageID, kind: kind, fallbackTarget: generationTarget)
+            merged.merge(outputs, into: generationPageID, kind: kind, fallbackTarget: generationTarget,
+                         previewArtboardIDs: generatedPreviewIDs)
             commit { $0 = merged }
             let next = (project?.versions.map(\.number).max() ?? 0) + 1
             newVersion = DesignVersion(number: next, document: document,
