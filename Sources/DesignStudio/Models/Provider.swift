@@ -232,7 +232,7 @@ nonisolated struct ProviderProfile: Codable, Identifiable, Hashable, Sendable {
 
     static func anthropic() -> ProviderProfile {
         ProviderProfile(name: "Anthropic API", kind: .anthropicAPI,
-                        baseURL: "https://api.anthropic.com", model: "claude-opus-5-5")
+                        baseURL: "https://api.anthropic.com")
     }
 }
 
@@ -246,7 +246,6 @@ nonisolated struct ProviderPreset: Identifiable, Sendable {
     var openAIBase: String? = nil
     /// Anthropic Messages 兼容地址
     var anthropicBase: String? = nil
-    var model: String
     /// Anthropic 端点是否用 Authorization: Bearer（国内兼容端点大多如此）
     var anthropicBearer = false
 
@@ -257,36 +256,33 @@ nonisolated struct ProviderPreset: Identifiable, Sendable {
     }
 
     func makeProfile() -> ProviderProfile {
-        ProviderProfile(name: name, kind: kind, baseURL: baseURL(for: kind) ?? "https://", model: model,
+        ProviderProfile(name: name, kind: kind, baseURL: baseURL(for: kind) ?? "https://",
                         useBearerAuth: kind == .anthropicAPI && anthropicBearer)
     }
 
     static let all: [ProviderPreset] = [
         ProviderPreset(name: "Anthropic", kind: .anthropicAPI,
-                       anthropicBase: "https://api.anthropic.com", model: "claude-opus-5-5"),
+                       anthropicBase: "https://api.anthropic.com"),
         ProviderPreset(name: "OpenAI", kind: .openAIResponses,
-                       openAIBase: "https://api.openai.com/v1", model: ""),
+                       openAIBase: "https://api.openai.com/v1"),
         ProviderPreset(name: "OpenRouter", kind: .openAICompatible,
-                       openAIBase: "https://openrouter.ai/api/v1", model: ""),
+                       openAIBase: "https://openrouter.ai/api/v1"),
         ProviderPreset(name: "DeepSeek", kind: .openAICompatible,
-                       openAIBase: "https://api.deepseek.com/v1", anthropicBase: "https://api.deepseek.com/anthropic",
-                       model: "deepseek-chat", anthropicBearer: true),
+                       openAIBase: "https://api.deepseek.com/v1", anthropicBase: "https://api.deepseek.com/anthropic", anthropicBearer: true),
         ProviderPreset(name: "智谱 GLM", kind: .anthropicAPI,
-                       openAIBase: "https://open.bigmodel.cn/api/paas/v4", anthropicBase: "https://open.bigmodel.cn/api/anthropic",
-                       model: "glm-4.6", anthropicBearer: true),
+                       openAIBase: "https://open.bigmodel.cn/api/paas/v4", anthropicBase: "https://open.bigmodel.cn/api/anthropic", anthropicBearer: true),
         ProviderPreset(name: "Kimi（Moonshot）", kind: .openAICompatible,
-                       openAIBase: "https://api.moonshot.cn/v1", anthropicBase: "https://api.moonshot.cn/anthropic",
-                       model: "kimi-k2-turbo-preview", anthropicBearer: true),
+                       openAIBase: "https://api.moonshot.cn/v1", anthropicBase: "https://api.moonshot.cn/anthropic", anthropicBearer: true),
         ProviderPreset(name: "阿里云百炼（通义）", kind: .openAICompatible,
-                       openAIBase: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus"),
+                       openAIBase: "https://dashscope.aliyuncs.com/compatible-mode/v1"),
         ProviderPreset(name: "硅基流动", kind: .openAICompatible,
-                       openAIBase: "https://api.siliconflow.cn/v1", model: "deepseek-ai/DeepSeek-V3"),
+                       openAIBase: "https://api.siliconflow.cn/v1"),
         ProviderPreset(name: "Ollama（本地）", kind: .openAICompatible,
-                       openAIBase: "http://localhost:11434/v1", model: "qwen3")
+                       openAIBase: "http://localhost:11434/v1")
     ]
 
     /// 自定义服务商：默认 OpenAI Chat Completions，类型和地址在详细设置里改
-    static let custom = ProviderPreset(name: "自定义", kind: .openAICompatible, openAIBase: "https://", model: "")
+    static let custom = ProviderPreset(name: "自定义", kind: .openAICompatible, openAIBase: "https://")
 
     /// 切换接口类型时：如果 Base URL 是某个服务商的已知地址，换成该服务商在新类型下的地址
     static func switching(baseURL: String, to kind: ProviderKind) -> (url: String, bearer: Bool)? {

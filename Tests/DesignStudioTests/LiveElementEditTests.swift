@@ -85,3 +85,17 @@ struct LiveMediumTests {
         #expect(boards.allSatisfy { $0.width == expectedWidth }, "\(prompt)")
     }
 }
+
+/// 手动运行：DS_LIVE=1 swift test --filter LiveModelListTests（打印本机各 CLI 实际提供的模型列表）
+@Suite("Live model lists", .enabled(if: ProcessInfo.processInfo.environment["DS_LIVE"] == "1"))
+struct LiveModelListTests {
+    @Test func printLists() {
+        for kind in [ProviderKind.claudeCode, .codex, .antigravity] {
+            let list = ModelCatalog.known(for: kind)
+            print("\(kind.rawValue) default=\(ModelCatalog.cliDefaultModel(kind) ?? "-") count=\(list.count)")
+            for m in list {
+                print("   \(m.id) | \(m.title) | ctx=\(m.limits.contextWindow ?? 0) | efforts=\(m.efforts) default=\(m.defaultEffort ?? "-")")
+            }
+        }
+    }
+}

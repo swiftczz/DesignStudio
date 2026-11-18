@@ -108,44 +108,27 @@ nonisolated struct ModelFamily: Hashable, Sendable {
     }
 }
 
-/// 各模型来源可选的模型列表
+/// 各模型来源可选的模型列表。不内置任何模型名（新模型发布后内置列表很快就会过时），都从 CLI 自己的数据里读：
 ///
-/// - Claude：Claude Code CLI 没有可读取的模型清单，这里内置当前一代模型的完整 ID，
-///   这样菜单能显示具体版本，且不会因为别名指向变化而悄悄换模型。
-/// - Codex：读取 Codex CLI 按账号拉取并缓存的 `~/.codex/models_cache.json`，
-///   与 `codex` 自带的模型选择器保持一致；文件缺失时退回内置列表。
+/// - Claude：Claude Code 按账号缓存的模型目录（`~/.claude/cache/model-catalog/*-cc.json`），
+///   只列出它自己的模型选择器里显示的那些（section = main），带上下文上限和思考强度。
+/// - Codex：Codex CLI 按账号缓存的 `~/.codex/models_cache.json`。
+/// - Antigravity：`agy models` 的结果（检测登录状态时刷新缓存）。
+/// 读不到时列表为空，菜单里只有「默认模型」（交给 CLI 决定），也可以在设置里手动填写模型 ID。
 nonisolated enum ModelCatalog {
-    private static let claudeLimits = ModelLimits(contextWindow: 1_000_000, maxOutput: 128_000)
-    /// `claude --effort` 接受的强度（Claude Code 缓存的模型目录里有每个模型的准确列表时以目录为准）
-    private static let claudeEfforts = ["low", "medium", "high", "xhigh", "max"]
-
-    private static let claudeBase: [ModelOption] = [
-        ModelOption(id: "claude-fable-5-2", title: "Fable 5.2", limits: claudeLimits, efforts: claudeEfforts),
-        ModelOption(id: "claude-opus-5-5", title: "Opus 5.5", limits: claudeLimits, efforts: claudeEfforts),
-        ModelOption(id: "claude-sonnet-5-5", title: "Sonnet 5.5", limits: claudeLimits, efforts: claudeEfforts),
-        ModelOption(id: "claude-haiku-5-5", title: "Haiku 5.5", limits: claudeLimits, efforts: claudeEfforts)
-    ]
-
     /// Claude 模型，带上每个模型实际生效的默认思考强度（菜单里直接显示，不写「默认」）
     static var claude: [ModelOption] {
-        let catalog = claudeCatalog()
+        guard let catalog = claudeCatalog() else { return [] }
         let settings = claudeSettings()
-        return claudeBase.map { option in
+        return catalog.pickerModels.map { option in
             var o = option
-            if let levels = catalog?.levels[o.id], !levels.isEmpty { o.efforts = levels }
             o.defaultEffort = claudeEffectiveEffort(model: o.id, catalog: catalog, settings: settings)
             return o
         }
     }
 
+    /// 缓存里没有给出模型支持的强度时，Codex `model_reasoning_effort` 可用的强度
     private static let codexEfforts = ["low", "medium", "high", "xhigh", "max"]
-
-    static let codexFallback: [ModelOption] = [
-        ModelOption(id: "gpt-6.1-sol", title: "GPT-6.1-Sol", efforts: codexEfforts),
-        ModelOption(id: "gpt-6-astra", title: "GPT-6-Astra", efforts: codexEfforts),
-        ModelOption(id: "gpt-6.1-terra", title: "GPT-6.1 Terra", efforts: codexEfforts),
-        ModelOption(id: "gpt-6-luna", title: "GPT-6-Luna", efforts: codexEfforts)
-    ]
 
     /// 某个来源的内置 / 缓存模型（不含用户在设置里填写的自定义模型）
     static func known(for kind: ProviderKind) -> [ModelOption] {
@@ -162,28 +145,19 @@ nonisolated enum ModelCatalog {
         var modelID = id
         if modelID.isEmpty { modelID = cliDefaultModel(kind) ?? "" }
         if let hit = known(for: kind).first(where: { $0.id == modelID }) { return hit.limits }
-        // Claude CLI 的别名（opus / sonnet / fable…）与默认模型都是当前一代，上下文同为 1M
-        if kind == .claudeCode, modelID.isEmpty || !modelID.contains("-4-") { return claudeLimits }
+        // Claude：选择器之外的模型（设置里手动填写的）也可能在 Claude Code 的模型目录里
+        if kind == .claudeCode, let hit = claudeCatalog()?.allModels.first(where: { $0.id == modelID }) { return hit.limits }
         return ModelLimits()
     }
 
     /// 把模型 ID 映射为可读名称，未知 ID 原样返回
     static func title(for id: String, kind: ProviderKind) -> String {
-        known(for: kind).first { $0.id == id }?.title ?? id
+        if let hit = known(for: kind).first(where: { $0.id == id }) { return hit.title }
+        if kind == .claudeCode, let hit = claudeCatalog()?.allModels.first(where: { $0.id == id }) { return hit.title }
+        return id
     }
 
     // MARK: - Antigravity
-
-    /// 内置列表：`agy models` 的结果（检测登录状态时会刷新缓存，缓存缺失时用这里）
-    static let antigravityFallback: [ModelOption] = [
-        ModelOption(id: "gemini-4-carbon-medium", title: "Gemini 4 Carbon (Medium)"),
-        ModelOption(id: "gemini-4-carbon-high", title: "Gemini 4 Carbon (High)"),
-        ModelOption(id: "gemini-4-argon-medium", title: "Gemini 4 Argon (Medium)"),
-        ModelOption(id: "gemini-4-hydrogen-high", title: "Gemini 4 Hydrogen (High)"),
-        ModelOption(id: "gemini-3.8-flash-medium", title: "Gemini 3.8 Flash (Medium)"),
-        ModelOption(id: "claude-opus-4-6-thinking", title: "Claude Opus 4.6 (Thinking)"),
-        ModelOption(id: "claude-sonnet-4-6", title: "Claude Sonnet 4.6 (Thinking)")
-    ]
 
     /// `agy models` 输出（每行「模型 ID<Tab>显示名」）的缓存文件
     static var antigravityCacheURL: URL {
@@ -209,9 +183,8 @@ nonisolated enum ModelCatalog {
 
     static func antigravityModels() -> [ModelOption] {
         guard let data = try? Data(contentsOf: antigravityCacheURL),
-              let pairs = try? JSONDecoder().decode([[String]].self, from: data) else { return antigravityFallback }
-        let list = pairs.compactMap { $0.count == 2 ? ModelOption(id: $0[0], title: $0[1]) : nil }
-        return list.isEmpty ? antigravityFallback : list
+              let pairs = try? JSONDecoder().decode([[String]].self, from: data) else { return [] }
+        return pairs.compactMap { $0.count == 2 ? ModelOption(id: $0[0], title: $0[1]) : nil }
     }
 
     // MARK: - CLI 默认模型
@@ -251,7 +224,7 @@ nonisolated enum ModelCatalog {
             ?? jsonString(home.appending(path: ".claude/settings.json"), key: "model")
         if let value, !value.isEmpty, value.lowercased() != "default" {
             let alias = value.lowercased().replacingOccurrences(of: "[1m]", with: "")
-            return claudeBase.first { $0.id.contains("-\(alias)-") }?.id ?? value
+            return claudeCatalog()?.aliases[alias] ?? value
         }
         return claudeCatalog()?.currentModel
     }
@@ -261,6 +234,12 @@ nonisolated enum ModelCatalog {
     /// Claude Code 按账号缓存的模型目录（`~/.claude/cache/model-catalog/*-cc.json`，cc = 命令行）：
     /// 每个模型支持的强度、内置默认强度，以及这个账号当前的模型和各模型的强度
     nonisolated struct ClaudeCatalog: Sendable {
+        /// Claude Code 模型选择器里显示的模型（section = main），按目录顺序
+        var pickerModels: [ModelOption] = []
+        /// 目录里的全部模型（含旧模型），用于显示名和上下文上限
+        var allModels: [ModelOption] = []
+        /// 别名（opus / sonnet / haiku / fable）对应的模型
+        var aliases: [String: String] = [:]
         var currentModel: String?
         var levels: [String: [String]] = [:]
         var builtinDefault: [String: String] = [:]
@@ -290,10 +269,22 @@ nonisolated enum ModelCatalog {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let catalog = root["catalog"] as? [String: Any] else { return nil }
         var result = ClaudeCatalog()
-        for m in (catalog["config"] as? [String: Any])?["models"] as? [[String: Any]] ?? [] {
-            guard let id = m["id"] as? String, let runtime = m["runtime"] as? [String: Any] else { continue }
-            if let levels = runtime["effort_levels"] as? [String] { result.levels[id] = levels }
+        let config = catalog["config"] as? [String: Any]
+        for m in config?["models"] as? [[String: Any]] ?? [] {
+            guard let id = m["id"] as? String else { continue }
+            let runtime = m["runtime"] as? [String: Any] ?? [:]
+            let levels = runtime["effort_levels"] as? [String] ?? []
+            if !levels.isEmpty { result.levels[id] = levels }
             if let d = runtime["default_effort"] as? String { result.builtinDefault[id] = d }
+            let option = ModelOption(id: id, title: (m["name"] as? String) ?? id,
+                                     limits: ModelLimits(contextWindow: runtime["max_input_tokens"] as? Int,
+                                                         maxOutput: runtime["max_output_tokens"] as? Int),
+                                     efforts: levels)
+            result.allModels.append(option)
+            if m["section"] as? String == "main" { result.pickerModels.append(option) }
+        }
+        for (alias, target) in config?["provider_alias_targets"] as? [String: Any] ?? [:] {
+            if let id = (target as? [String: Any])?["default"] as? String { result.aliases[alias] = id }
         }
         let state = catalog["state"] as? [String: Any]
         result.currentModel = state?["model"] as? String
@@ -383,13 +374,13 @@ nonisolated enum ModelCatalog {
     private static func codexModels() -> [ModelOption] {
         let url = codexHome.appending(path: "models_cache.json")
         guard let stamp = (try? FileManager.default.attributesOfItem(atPath: url.path(percentEncoded: false)))?[.modificationDate] as? Date
-        else { return codexFallback }
+        else { return [] }
 
         lock.lock(); defer { lock.unlock() }
         if let cached, cached.stamp == stamp { return cached.options }
 
         guard let data = try? Data(contentsOf: url),
-              let cache = try? JSONDecoder().decode(CodexCache.self, from: data) else { return codexFallback }
+              let cache = try? JSONDecoder().decode(CodexCache.self, from: data) else { return [] }
         let options = cache.models
             .filter { ($0.visibility ?? "list") == "list" }
             .sorted { ($0.priority ?? .max) < ($1.priority ?? .max) }
@@ -401,7 +392,7 @@ nonisolated enum ModelCatalog {
                                    efforts: m.supported_reasoning_levels?.map(\.effort) ?? codexEfforts,
                                    defaultEffort: configured ?? m.default_reasoning_level)
             }
-        let result = options.isEmpty ? codexFallback : options
+        let result = options
         cached = (stamp, result)
         return result
     }

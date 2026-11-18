@@ -90,12 +90,18 @@ nonisolated struct AnthropicProvider: LLMProvider {
     /// 模型输出上限未知时使用（兼容端点的模型列表通常不带上限）
     static let fallbackMaxTokens = 32000
 
-    /// 只对 Anthropic 官方端点上支持自适应思考的模型（Claude 5 代、Fable / Mythos、Opus 4.6+、Sonnet 4.6）开启
+    /// 只对 Anthropic 官方端点上支持自适应思考的模型开启：按模型 ID 里的版本号判断（4.6 及以后），
+    /// 不列具体模型，新模型发布后不用改代码。旧格式（claude-3-5-sonnet）和 4.5 及以前不开启
     static func supportsThinkingSummary(model: String, url: URL) -> Bool {
-        guard url.host == "api.anthropic.com", model.hasPrefix("claude-") else { return false }
-        let prefixes = ["claude-fable-", "claude-mythos-", "claude-opus-5", "claude-sonnet-5", "claude-haiku-5",
-                        "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-sonnet-4-6"]
-        return prefixes.contains { model.hasPrefix($0) }
+        guard url.host == "api.anthropic.com" else { return false }
+        return claudeVersion(model).map { $0.major >= 5 || ($0.major == 4 && $0.minor >= 6) } ?? false
+    }
+
+    /// claude-<系列>-<主版本>[-<次版本>][-<日期>] → (主版本, 次版本)；日期（8 位数字）不算次版本
+    static func claudeVersion(_ model: String) -> (major: Int, minor: Int)? {
+        guard let m = model.lowercased().firstMatch(of: /^claude-[a-z]+-(\d{1,2})(?:-(\d{1,2}))?(?:-|$|\[)/),
+              let major = Int(m.1) else { return nil }
+        return (major, m.2.flatMap { Int($0) } ?? 0)
     }
 
     static func encode(_ m: LLMMessage) -> [String: Any] {

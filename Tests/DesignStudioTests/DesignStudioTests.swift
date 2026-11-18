@@ -645,3 +645,45 @@ struct ClaudeEffortTests {
         #expect(ModelCatalog.claudeEffectiveEffort(model: "claude-sonnet-5-5", catalog: c, settings: [:]) == "medium")
     }
 }
+
+@Suite("不内置模型")
+struct NoBuiltInModelTests {
+    @Test func claudeModelsComeFromClaudeCodeCatalog() throws {
+        let json = #"""
+        {"catalog": {"config": {
+          "models": [
+            {"id": "claude-new-9", "name": "New 9", "section": "main",
+             "runtime": {"max_input_tokens": 2000000, "max_output_tokens": 64000, "effort_levels": ["low","high"], "default_effort": "high"}},
+            {"id": "claude-old-1", "name": "Old 1", "section": "overflow", "runtime": {}}
+          ],
+          "provider_alias_targets": {"new": {"default": "claude-new-9"}}
+        }, "state": {"model": "claude-new-9"}}}
+        """#
+        let c = try #require(ModelCatalog.parseClaudeCatalog(Data(json.utf8)))
+        // 只有 Claude Code 选择器里的模型（section = main）进入菜单，旧模型只用于查名称和上限
+        #expect(c.pickerModels.map(\.id) == ["claude-new-9"])
+        #expect(c.pickerModels[0].title == "New 9")
+        #expect(c.pickerModels[0].limits.contextWindow == 2_000_000)
+        #expect(c.pickerModels[0].efforts == ["low", "high"])
+        #expect(c.allModels.count == 2)
+        #expect(c.aliases["new"] == "claude-new-9")
+    }
+
+    @Test func presetsHaveNoDefaultModel() {
+        for preset in ProviderPreset.all {
+            #expect(preset.makeProfile().model.isEmpty, "\(preset.name)")
+        }
+        #expect(ProviderProfile.anthropic().model.isEmpty)
+    }
+
+    @Test func thinkingSummaryByVersionNotByList() {
+        let api = URL(string: "https://api.anthropic.com")!
+        #expect(AnthropicProvider.supportsThinkingSummary(model: "claude-opus-4-6", url: api))
+        #expect(AnthropicProvider.supportsThinkingSummary(model: "claude-sonnet-7-1", url: api))   // 未来的新模型
+        #expect(AnthropicProvider.supportsThinkingSummary(model: "claude-newfamily-5", url: api))
+        #expect(!AnthropicProvider.supportsThinkingSummary(model: "claude-haiku-4-5-20251001", url: api))
+        #expect(!AnthropicProvider.supportsThinkingSummary(model: "claude-opus-4-20250514", url: api))
+        #expect(!AnthropicProvider.supportsThinkingSummary(model: "claude-3-5-sonnet-20241022", url: api))
+        #expect(!AnthropicProvider.supportsThinkingSummary(model: "claude-opus-4-6", url: URL(string: "https://open.bigmodel.cn")!))
+    }
+}
