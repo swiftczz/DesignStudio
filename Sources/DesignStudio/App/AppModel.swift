@@ -35,6 +35,7 @@ final class AppModel {
     /// 左侧项目边栏的显示状态（进入项目和全屏时收起）
     var sidebarVisibility: NavigationSplitViewVisibility = .all
     var thumbnailStamps: [UUID: Date] = [:]
+    private(set) var regeneratingTitles: Set<UUID> = []
 
     @ObservationIgnored private var sessions: [UUID: ProjectSession] = [:]
     @ObservationIgnored private var thumbnailCache: [UUID: (Date, NSImage)] = [:]
@@ -88,7 +89,8 @@ final class AppModel {
     @discardableResult
     func createProject(prompt: String, kind: ProjectKind, designSystemID: UUID?,
                        model choice: ModelChoice, attachments: [ChatAttachment]) -> UUID {
-        var p = Project(name: Project.suggestedName(from: prompt), kind: kind)
+        var p = Project(name: ProjectTitle.provisional(from: prompt, attachments: attachments), kind: kind)
+        p.titleNeedsSummary = true
         p.designSystemID = designSystemID
         p.providerID = choice.providerID ?? settings.defaultProviderID
         p.model = choice.providerID == nil ? nil : choice.model
@@ -107,13 +109,42 @@ final class AppModel {
     func rename(_ id: UUID, to name: String) {
         let n = name.trimmed
         guard !n.isEmpty else { return }
-        updateProject(id) { $0.name = n }
+        updateProject(id) {
+            $0.name = n
+            $0.titleNeedsSummary = false
+        }
+    }
+
+    func regenerateTitle(_ id: UUID) async {
+        guard let project = project(id), regeneratingTitles.insert(id).inserted else { return }
+        defer { regeneratingTitles.remove(id) }
+        do {
+            guard let profile = session(for: id).provider else {
+                throw LLMError.invalidResponse("请先在设置中添加模型来源。")
+            }
+            let provider = try ProviderFactory.make(profile)
+            let request = ProjectTitle.request(for: project, maxOutput: profile.limits.maxOutput)
+            var response = ""
+            for try await event in provider.stream(request) {
+                if case .text(let delta) = event { response += delta }
+            }
+            guard let current = self.project(id), current.name == project.name,
+                  current.titleNeedsSummary == project.titleNeedsSummary else { return }
+            guard let title = ProjectTitle.clean(response) else { throw LLMError.emptyResponse }
+            updateProject(id, touch: false) {
+                $0.name = title
+                $0.titleNeedsSummary = false
+            }
+        } catch {
+            if self.project(id) != nil { ExportService.presentError("无法重新生成标题", error) }
+        }
     }
 
     func duplicate(_ id: UUID) {
         guard var copy = project(id) else { return }
         copy.id = UUID()
-        copy.name += " 副本"
+        copy.name = copy.displayName + " 副本"
+        copy.titleNeedsSummary = false
         copy.createdAt = .now
         copy.updatedAt = .now
         projects.append(copy)

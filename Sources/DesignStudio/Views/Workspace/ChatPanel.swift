@@ -217,7 +217,7 @@ struct MessageView: View {
     }
 
     @ViewBuilder private var assistantBlock: some View {
-        let raw = isStreaming ? session.streamingText : message.text
+        let raw = isStreaming ? ProjectTitle.splitReply(session.streamingText, streaming: true).body : message.text
         let display = HTMLExtractor.conversationalText(raw)
         let thinking = isStreaming ? session.streamingThinking : (message.thinking ?? "")
 

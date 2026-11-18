@@ -16,8 +16,10 @@ nonisolated struct LLMRequest: Sendable {
     /// 元素级修改：模型返回元素修改代码块（CLI 提供方据此调整末尾提醒）
     var elementEdit = false
     var files: [ChatAttachment] = []
+    var titleOnly = false
 
     var replyFormatReminder: String {
+        if titleOnly { return "Output only the short project title on one line." }
         if elementEdit {
             return "Output one block: ```html element patch for text/style JSON, or ```html element for replacement HTML."
         }

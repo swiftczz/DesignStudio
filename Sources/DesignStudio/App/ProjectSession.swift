@@ -1193,7 +1193,8 @@ final class ProjectSession {
     }
 
     private func finish(messageID: UUID, error generationError: Error?) async {
-        let text = streamingText
+        let reply = ProjectTitle.splitReply(streamingText)
+        let text = reply.body
         let thinking = streamingThinking.trimmed
         let cancelled = wasCancelled
 
@@ -1237,6 +1238,11 @@ final class ProjectSession {
 
         app.updateProject(projectID) { p in
             guard let i = p.messages.firstIndex(where: { $0.id == messageID }) else { return }
+            if error == nil, !cancelled, p.needsTitleSummary, let title = reply.title,
+               !app.regeneratingTitles.contains(projectID) {
+                p.name = title
+                p.titleNeedsSummary = false
+            }
             p.messages[i].text = text
             p.messages[i].thinking = thinking.isEmpty ? nil : thinking
             if let error { p.messages[i].errorText = error.localizedDescription }

@@ -133,7 +133,7 @@ struct ProjectCard: View {
             VStack(alignment: .leading, spacing: 0) {
                 ProjectThumbnail(project: project)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(project.name).font(.headline).lineLimit(1)
+                    Text(project.displayName).font(.headline).lineLimit(1)
                     Text(project.updatedAt, format: .relative(presentation: .named))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -151,6 +151,7 @@ struct ProjectCard: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .contextMenu {
+            RegenerateProjectTitleButton(projectID: project.id)
             Button("创建副本") { app.duplicate(project.id) }
             Button("删除", role: .destructive) { app.deleteProject(project.id) }
         }

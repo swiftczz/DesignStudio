@@ -256,14 +256,19 @@ nonisolated struct Project: Codable, Identifiable, Sendable {
         return versions.last
     }
 
-    static func suggestedName(from prompt: String) -> String {
-        let line = prompt
-            .split(whereSeparator: \.isNewline)
-            .first
-            .map(String.init)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if line.isEmpty { return "未命名设计" }
-        return line.count > 24 ? String(line.prefix(24)) + "…" : line
+    /// nil 兼容旧存档，通过首条需求判断是否曾使用默认标题。
+    var titleNeedsSummary: Bool?
+
+    var needsTitleSummary: Bool {
+        if let titleNeedsSummary { return titleNeedsSummary }
+        guard let first = messages.first(where: { $0.role == .user }) else { return false }
+        return name == "未命名设计" || name == ProjectTitle.legacyName(from: first.text)
+    }
+
+    var displayName: String {
+        guard titleNeedsSummary == nil, needsTitleSummary,
+              let first = messages.first(where: { $0.role == .user }) else { return name }
+        return ProjectTitle.provisional(from: first.text, attachments: first.attachments)
     }
 }
 

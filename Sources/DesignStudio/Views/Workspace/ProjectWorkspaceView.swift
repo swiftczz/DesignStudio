@@ -28,7 +28,7 @@ struct ProjectWorkspaceView: View {
                 .inspectorColumnWidth(min: 280, ideal: 320, max: 460)
         }
         // 全屏查看画板时隐藏标题和工具栏按钮（保留红绿灯），让窗口顶部与背景一致
-        .navigationTitle(isFullScreen ? "" : (session.project?.name ?? ""))
+        .navigationTitle(isFullScreen ? "" : (session.project?.displayName ?? ""))
         .navigationSubtitle(isFullScreen ? "" : subtitle)
         .toolbar {
             if !isFullScreen { toolbarContent }
@@ -186,7 +186,7 @@ private struct ProjectSettingsButton: View {
             if let project = session.project {
                 Form {
                     TextField("名称", text: Binding(
-                        get: { project.name },
+                        get: { project.displayName },
                         set: { app.rename(project.id, to: $0) }
                     ))
                     Picker("类型", selection: Binding(

@@ -100,7 +100,10 @@ nonisolated enum DesignPrompt {
                             pageID: UUID? = nil, selection: SelectionContext? = nil,
                             commentsOnly: Bool = false) -> LLMRequest {
         let limits = profile.limits
-        let systemText = system(kind: project.kind, designSystem: designSystem)
+        var systemText = system(kind: project.kind, designSystem: designSystem)
+        if project.needsTitleSummary {
+            systemText += "\n\n## Project title\n" + ProjectTitle.replyInstruction
+        }
         let page = project.workingDocument.page(pageID)
         let artboards = page?.artboards ?? []
 

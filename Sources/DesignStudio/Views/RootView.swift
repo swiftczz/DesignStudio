@@ -3,12 +3,14 @@ import AppKit
 
 struct RootView: View {
     @Environment(AppModel.self) private var app
+    private let sidebarWidth: CGFloat = 285
 
     var body: some View {
         @Bindable var app = app
         NavigationSplitView(columnVisibility: $app.sidebarVisibility) {
             SidebarView()
-                .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 320)
+                .frame(minWidth: sidebarWidth, maxWidth: 320)
+                .navigationSplitViewColumnWidth(min: sidebarWidth, ideal: sidebarWidth, max: 320)
                 .toolbar(removing: fullScreenSession == nil ? nil : .sidebarToggle)
         } detail: {
             detail
@@ -68,9 +70,10 @@ struct SidebarView: View {
                         .tag(SidebarRoute.project(project.id))
                         .contextMenu {
                             Button("重命名…") {
-                                renameText = project.name
+                                renameText = project.displayName
                                 renamingID = project.id
                             }
+                            RegenerateProjectTitleButton(projectID: project.id)
                             Button("创建副本") { app.duplicate(project.id) }
                             Divider()
                             Button("删除", role: .destructive) { deletingID = project.id }
@@ -118,16 +121,30 @@ private struct ProjectRow: View {
                 .foregroundStyle(Theme.accent)
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 1) {
-                Text(project.name).lineLimit(1)
+                Text(project.displayName)
+                    .lineLimit(1)
+                    .help(project.displayName)
                 Text(project.updatedAt, format: .relative(presentation: .named))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
-            if app.existingSession(project.id)?.isGenerating == true {
+            if app.existingSession(project.id)?.isGenerating == true || app.regeneratingTitles.contains(project.id) {
                 ProgressView().controlSize(.small)
             }
         }
+    }
+}
+
+struct RegenerateProjectTitleButton: View {
+    @Environment(AppModel.self) private var app
+    let projectID: UUID
+
+    var body: some View {
+        Button("重新生成标题", systemImage: "sparkles") {
+            Task { await app.regenerateTitle(projectID) }
+        }
+        .disabled(app.regeneratingTitles.contains(projectID))
     }
 }
 
