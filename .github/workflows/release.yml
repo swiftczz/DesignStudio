@@ -1,0 +1,87 @@
+name: Release
+
+# 推送 v* tag 时编译 DMG 并发布到 GitHub Releases；手动运行时只把 DMG 作为构建产物上传
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (without leading v), e.g. 1.0.0'
+        required: true
+        default: '1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # Package.swift 需要 Swift 6.4 工具链：选用 runner 上最新的 Xcode
+      - name: Select latest Xcode
+        run: |
+          latest=$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)
+          echo "Using $latest"
+          sudo xcode-select -s "$latest/Contents/Developer"
+          swift --version
+
+      - name: Derive version
+        id: ver
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "is_tag=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            echo "is_tag=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run tests
+        run: swift test
+
+      - name: Generate changelog
+        if: steps.ver.outputs.is_tag == 'true'
+        run: |
+          # 找上一个 tag（首次发版时为空）
+          prev_tag=$(git describe --tags --abbrev=0 "${{ github.ref_name }}^" 2>/dev/null || echo "")
+          ./Scripts/generate_changelog.sh "$prev_tag" "${{ github.ref_name }}" "${{ github.repository }}" > CHANGELOG.md
+          cat >> CHANGELOG.md <<'NOTE'
+
+          ## 安装
+
+          1. 下载下方的 `DesignStudio-*.dmg`，打开后把 DesignStudio 拖到「应用程序」。
+          2. 应用目前没有 Developer ID 签名。第一次打开如果被拦下，请到「系统设置 → 隐私与安全性」底部点「仍要打开」；
+             或在终端运行 `xattr -dr com.apple.quarantine /Applications/DesignStudio.app`。
+
+          系统要求：macOS 26 或更新版本（Apple 芯片与 Intel 通用）。
+          NOTE
+          echo "=== changelog ==="
+          cat CHANGELOG.md
+
+      - name: Build DMG
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: ./Scripts/release-dmg.sh "${{ steps.ver.outputs.version }}"
+
+      - name: List DMG
+        run: ls -lh "dist/DesignStudio-${{ steps.ver.outputs.version }}.dmg"
+
+      - name: Upload DMG to Release
+        if: steps.ver.outputs.is_tag == 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/DesignStudio-${{ steps.ver.outputs.version }}.dmg
+          body_path: CHANGELOG.md
+
+      - name: Upload DMG as workflow artifact
+        if: steps.ver.outputs.is_tag == 'false'
+        uses: actions/upload-artifact@v7
+        with:
+          name: DesignStudio-${{ steps.ver.outputs.version }}
+          path: dist/DesignStudio-${{ steps.ver.outputs.version }}.dmg
