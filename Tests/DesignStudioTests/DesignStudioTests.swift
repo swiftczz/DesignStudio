@@ -274,6 +274,16 @@ struct ArtboardTests {
         let doc = project.workingDocument
         #expect(doc.allArtboards.count == 1)
         #expect(doc.allArtboards[0].width == 1920)
+        #expect(doc.pages[0].name == "画布 1")
+    }
+
+    @Test func canvasDisplayNamesSupportExistingProjects() throws {
+        let legacy = Data(#"{"pages":[{"id":"B934764D-156D-4325-A88A-88AAB9EBA80F","name":"页面 2","artboards":[]}]}"#.utf8)
+        let document = try JSONDecoder().decode(DesignDocument.self, from: legacy)
+        #expect(document.pages[0].displayName == "画布 2")
+        #expect(document.pages[0].name == "页面 2")
+        #expect(DesignPage(name: "页面 2 · 阅读流程").displayName == "页面 2 · 阅读流程")
+        #expect(DesignDocument().pages[0].name == "画布 1")
     }
 }
 

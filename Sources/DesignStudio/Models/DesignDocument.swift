@@ -1,7 +1,7 @@
 import Foundation
 import CoreGraphics
 
-// MARK: - 文档结构：页面 → 画板
+// MARK: - 文档结构：画布 → 画板
 
 /// 画布上的一个画板：一个完整独立的 HTML 文档（一个界面 / 一页幻灯片）
 nonisolated struct Artboard: Codable, Identifiable, Hashable, Sendable {
@@ -24,6 +24,16 @@ nonisolated struct DesignPage: Codable, Identifiable, Hashable, Sendable {
     var id = UUID()
     var name: String
     var artboards: [Artboard] = []
+
+    static func defaultName(index: Int) -> String { "画布 \(index)" }
+
+    /// 兼容旧项目的默认名称，保留保存格式和自定义名称。
+    var displayName: String {
+        let prefix = "页面 "
+        guard name.hasPrefix(prefix), let index = Int(name.dropFirst(prefix.count)),
+              index > 0, name == "\(prefix)\(index)" else { return name }
+        return Self.defaultName(index: index)
+    }
 
     /// 所有画板的外接矩形
     var bounds: CGRect? {
@@ -87,8 +97,8 @@ nonisolated struct DesignPage: Codable, Identifiable, Hashable, Sendable {
 nonisolated struct DesignDocument: Codable, Hashable, Sendable {
     var pages: [DesignPage]
 
-    init(pages: [DesignPage] = [DesignPage(name: "页面 1")]) {
-        self.pages = pages.isEmpty ? [DesignPage(name: "页面 1")] : pages
+    init(pages: [DesignPage] = []) {
+        self.pages = pages.isEmpty ? [DesignPage(name: DesignPage.defaultName(index: 1))] : pages
     }
 
     var isEmpty: Bool { pages.allSatisfy { $0.artboards.isEmpty } }
@@ -126,7 +136,7 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
         let size = kind.artboardSize
         let board = Artboard(name: kind == .slides ? "幻灯片 1" : "画板 1", html: html,
                              width: size.width, height: size.height)
-        return DesignDocument(pages: [DesignPage(name: "页面 1", artboards: [board])])
+        return DesignDocument(pages: [DesignPage(name: DesignPage.defaultName(index: 1), artboards: [board])])
     }
 
     /// 把模型输出的画板合并进指定页面：同名画板替换内容，新增画板自动分行。

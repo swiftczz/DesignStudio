@@ -511,7 +511,7 @@ private struct CanvasTopLeftBar: View {
     }
 }
 
-/// 页面切换与画板排列菜单
+/// 画布切换与画板排列菜单
 private struct PagePicker: View {
     @Bindable var session: ProjectSession
     @State private var isOpen = false
@@ -521,7 +521,7 @@ private struct PagePicker: View {
             isOpen.toggle()
         } label: {
             HStack(spacing: 5) {
-                Text(session.currentPage?.name ?? "页面")
+                Text(session.currentPage?.displayName ?? "画布")
                     .lineLimit(1)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
@@ -530,7 +530,7 @@ private struct PagePicker: View {
         }
         .buttonStyle(.borderless)
         .tint(.primary)
-        .help("切换页面（当前页面 \(session.currentPage?.artboards.count ?? 0) 个画板）")
+        .help("切换画布（当前画布 \(session.currentPage?.artboards.count ?? 0) 个画板）")
         .popover(isPresented: $isOpen, arrowEdge: .bottom) {
             PageList(session: session) { isOpen = false }
         }
@@ -549,7 +549,7 @@ private struct PageList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("页面")
+            Text("画布")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 10)
@@ -582,7 +582,7 @@ private struct PageList: View {
                 session.addPage()
                 dismiss()
             } label: {
-                Label("新建页面", systemImage: "plus")
+                Label("新建画布", systemImage: "plus")
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
@@ -609,13 +609,13 @@ private struct PageList: View {
                 .opacity(isCurrent ? 1 : 0)
                 .frame(width: 12)
             if renamingID == page.id {
-                TextField("页面名称", text: $newName)
+                TextField("画布名称", text: $newName)
                     .textFieldStyle(.plain)
                     .focused($renameFocused)
                     .onSubmit { commitRename(page.id) }
                     .onExitCommand { renamingID = nil }
             } else {
-                Text(page.name)
+                Text(page.displayName)
                     .lineLimit(1)
                     .fontWeight(isCurrent ? .medium : .regular)
             }
@@ -640,15 +640,15 @@ private struct PageList: View {
             dismiss()
         }
         .contextMenu {
-            Button("重命名", systemImage: "pencil") { startRename(page) }
+            Button("重命名画布", systemImage: "pencil") { startRename(page) }
             if session.document.pages.count > 1 {
-                Button("删除页面", systemImage: "trash", role: .destructive) { session.deletePage(page.id) }
+                Button("删除画布", systemImage: "trash", role: .destructive) { session.deletePage(page.id) }
             }
         }
     }
 
     private func startRename(_ page: DesignPage) {
-        newName = page.name
+        newName = page.displayName
         renamingID = page.id
         DispatchQueue.main.async { renameFocused = true }
     }

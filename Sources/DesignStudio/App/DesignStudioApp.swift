@@ -119,7 +119,7 @@ struct AppCommands: Commands {
                 .keyboardShortcut("g", modifiers: [.command, .shift])
                 .disabled(!(app.activeSession?.canUngroup ?? false))
             Button("新建画板") { app.activeSession?.addArtboard() }
-            Button("新建页面") { app.activeSession?.addPage() }
+            Button("新建画布") { app.activeSession?.addPage() }
             Divider()
             Button("放大") { app.activeSession?.zoomIn() }
                 .keyboardShortcut("=", modifiers: .command)

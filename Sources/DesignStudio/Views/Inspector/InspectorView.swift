@@ -158,7 +158,7 @@ struct LayersView: View {
         return out
     }
 
-    /// 页面默认展开（记录「closed:」表示收起），画板 / 元素默认收起
+    /// 画布默认展开（记录「closed:」表示收起），画板 / 元素默认收起
     private func isExpanded(_ id: String) -> Bool {
         session.expandedLayers.contains(id) || id.hasPrefix("p:") && !session.expandedLayers.contains("closed:" + id)
     }
@@ -194,7 +194,7 @@ struct LayersView: View {
         }
         if doc.pages.count == 1, let page = doc.pages.first { return boards(page) }
         return doc.pages.map { page in
-            LayerItem(id: LayerID.page(page.id), title: page.name, detail: "", symbol: "doc",
+            LayerItem(id: LayerID.page(page.id), title: page.displayName, detail: "", symbol: "rectangle.dashed",
                       target: nil, dimmed: page.id != session.currentPage?.id, children: boards(page))
         }
     }
@@ -393,7 +393,7 @@ struct TweaksView: View {
             ContentUnavailableView {
                 Label("没有可调参数", systemImage: "slider.horizontal.3")
             } description: {
-                Text("当前页面的画板没有暴露可调参数。可以让 AI「提供几个可以调节的主题参数」。")
+                Text("当前画布的画板没有暴露可调参数。可以让 AI「提供几个可以调节的主题参数」。")
             } actions: {
                 Button("让 AI 添加参数") {
                     session.draft = "请为当前设计的每个画板暴露 4–6 个相同的可调参数（主色、圆角、字号比例、间距密度等），保持设计不变。"
@@ -411,7 +411,7 @@ struct TweaksView: View {
                         ))
                     }
                 } footer: {
-                    Text("调整会实时作用于当前页面的所有画板，满意后写入设计并保存为新版本。")
+                    Text("调整会实时作用于当前画布的所有画板，满意后写入设计并保存为新版本。")
                 }
                 Section {
                     HStack {

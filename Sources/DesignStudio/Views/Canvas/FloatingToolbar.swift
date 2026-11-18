@@ -276,7 +276,7 @@ struct AskAIBar: View {
 
     private var targetDescription: String {
         guard let sel = session.selection, let board = session.document.artboard(sel.artboardID) else {
-            return "未选中内容：AI 会根据描述修改当前页面"
+            return "未选中内容：AI 会根据描述修改当前画布"
         }
         if sel.elementID != nil, let p = session.selectedProps {
             return "修改「\(board.name)」中的\(ElementKind.title(p.kind)) \(ProjectSession.displayName(p))"

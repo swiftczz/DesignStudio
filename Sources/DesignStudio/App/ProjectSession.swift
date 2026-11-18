@@ -821,7 +821,7 @@ final class ProjectSession {
 
     func addPage() {
         guard isEditable else { return }
-        let page = DesignPage(name: "页面 \(document.pages.count + 1)")
+        let page = DesignPage(name: DesignPage.defaultName(index: document.pages.count + 1))
         commit { $0.pages.append(page) }
         currentPageID = page.id
         clearSelection()

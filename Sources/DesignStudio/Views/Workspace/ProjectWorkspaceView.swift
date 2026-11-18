@@ -248,7 +248,7 @@ struct ExportMenu: View {
                     }
                     Button("拷贝 HTML", systemImage: "doc.on.doc") { ExportService.copyHTML(board.html) }
                 }
-                Section("当前页面（\(boards.count) 个画板）") {
+                Section("当前画布（\(boards.count) 个画板）") {
                     Button("导出全部 HTML…", systemImage: "folder") {
                         ExportService.exportAllHTML(boards, projectName: project.name)
                     }
