@@ -75,7 +75,7 @@ struct HomeView: View {
             HStack(spacing: 2) {
                 AttachButton { attachments += $0 }
                 DesignSystemMenu(selection: $designSystemID, compact: true)
-                ProviderMenu(selection: $modelChoice, compact: true)
+                ProviderMenu(selection: $modelChoice)
                 Spacer(minLength: 8)
                 Button(action: start) {
                     Label("开始设计", systemImage: "arrow.up")

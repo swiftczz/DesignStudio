@@ -258,8 +258,7 @@ struct AskAIBar: View {
                     .lineLimit(1...5)
                     .focused($focused)
                     .onSubmit(send)
-                ProviderMenu(selection: providerBinding)
-                    .controlSize(.small)
+                ProviderMenu(selection: providerBinding, showsLogo: false, maximumTitleWidth: 225)
                 Button(action: send) {
                     Image(systemName: "arrow.up").fontWeight(.semibold)
                 }

@@ -348,28 +348,23 @@ struct AttachButton: View {
 struct ProviderMenu: View {
     @Environment(AppModel.self) private var app
     @Binding var selection: ModelChoice
-    /// 紧凑样式（对话输入框）：灰色纯文字 + 小箭头，悬停时出现浅灰底
-    var compact = false
+    var showsLogo = true
+    var maximumTitleWidth: CGFloat? = nil
 
     var body: some View {
-        if compact {
-            menu {
-                ComposerChipLabel {
+        menu {
+            ComposerChipLabel {
+                if showsLogo {
                     ProviderLogo(current, size: 14)
-                    Text(currentTitle)
+                        .accessibilityHidden(true)
                 }
-            }
-                .composerMenuStyle()
-                .help("选择用于生成设计的模型")
-        } else {
-            menu {
-                Label { Text(currentTitle) } icon: { ProviderLogo(current, size: 14) }
+                Text(currentTitle)
                     .lineLimit(1)
+                    .frame(maxWidth: maximumTitleWidth, alignment: .leading)
             }
-            .menuIndicator(.visible)
-            .fixedSize()
-            .help("选择用于生成设计的模型")
         }
+        .composerMenuStyle()
+        .help(current == nil ? "选择用于生成设计的模型" : currentTitle)
     }
 
     private var currentTitle: String {

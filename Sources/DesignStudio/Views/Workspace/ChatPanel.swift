@@ -589,7 +589,7 @@ struct ChatComposer: View {
 
             HStack(spacing: 2) {
                 AttachButton { session.draftAttachments += $0 }
-                ProviderMenu(selection: providerBinding, compact: true)
+                ProviderMenu(selection: providerBinding)
                 Spacer(minLength: 8)
                 if session.isGenerating {
                     Button {
