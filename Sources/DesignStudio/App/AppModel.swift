@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import WebKit
 import Observation
 
 enum SidebarRoute: Hashable {
@@ -160,6 +161,42 @@ final class AppModel {
             return
         }
         if redo { activeSession?.redo() } else { activeSession?.undo() }
+    }
+
+    enum PasteboardAction { case cut, copy, paste, selectAll }
+
+    /// 剪切 / 拷贝 / 粘贴：文字输入框（对话、代码、设置）或画板里正在编辑的文字交给系统处理，
+    /// 画布有焦点时作用于画布上选中的元素 / 画板
+    func performPasteboard(_ action: PasteboardAction) {
+        let selector: Selector = switch action {
+        case .cut: #selector(NSText.cut(_:))
+        case .copy: #selector(NSText.copy(_:))
+        case .paste: #selector(NSText.paste(_:))
+        case .selectAll: #selector(NSText.selectAll(_:))
+        }
+        guard let s = activeSession, action != .selectAll, canvasOwnsKeyboard(s) else {
+            NSApp.sendAction(selector, to: nil, from: nil)
+            return
+        }
+        switch action {
+        case .cut: s.cutSelection()
+        case .copy: s.copySelection()
+        case .paste: s.paste()
+        case .selectAll: break
+        }
+    }
+
+    /// 画布相关的菜单命令（拷贝为 PNG、编组…）只在画布有焦点时生效
+    func performCanvasCommand(_ body: (ProjectSession) -> Void) {
+        guard let s = activeSession, canvasOwnsKeyboard(s) else { return }
+        body(s)
+    }
+
+    private func canvasOwnsKeyboard(_ s: ProjectSession) -> Bool {
+        let responder = NSApp.keyWindow?.firstResponder
+        if responder is NSTextView { return false }
+        if responder is WKWebView { return !s.isEditingText && !s.interactivePreview }
+        return s.canvasFocused
     }
 
     // MARK: - Thumbnails

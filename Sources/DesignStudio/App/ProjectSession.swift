@@ -41,6 +41,14 @@ final class ProjectSession {
     var selection: CanvasSelection?
     var selectedProps: ElementProps?
     var hover: CanvasHover?
+    /// 正在画板里行内编辑文字（这时 ⌘C / ⌘V 交给网页处理文字）
+    var isEditingText = false
+    /// 画布本身（而不是对话框等文字输入框）拥有键盘焦点
+    var canvasFocused = false
+    /// 应用内的元素剪贴板：同一个画板里粘贴用源码（保留 class），跨画板用样式展开后的代码
+    private(set) var elementClipboard: ElementClipboard?
+    /// 拷贝的属性（元素最终生效的样式）
+    private(set) var copiedStyle: [String: String]?
     var trees: [UUID: [ElementNode]] = [:]
     var expandedLayers: Set<String> = []
     var pendingComment: (artboardID: UUID, props: ElementProps)?
@@ -138,6 +146,8 @@ final class ProjectSession {
     }
 
     var canAsk: Bool { !isGenerating && !askDraft.trimmed.isEmpty }
+    /// 右键菜单「询问 AI」：有选中对象且没有在生成
+    var canAskAboutSelection: Bool { selection != nil && !isGenerating }
 
     var provider: ProviderProfile? {
         if let chosen = app.provider(for: project?.providerID) {
@@ -371,7 +381,10 @@ final class ProjectSession {
             } else if hover?.artboardID == artboardID {
                 hover = nil
             }
+        case "editing":
+            isEditingText = true
         case "select":
+            isEditingText = false
             if let p = msg.props {
                 selection = CanvasSelection(artboardID: artboardID, elementID: p.id)
                 selectedProps = p
@@ -386,6 +399,7 @@ final class ProjectSession {
                 selectedProps = p
             }
         case "changed":
+            isEditingText = false
             if let r = msg.result { apply(r, artboardID: artboardID) }
         case "commentPick":
             if let p = msg.props {
@@ -461,6 +475,162 @@ final class ProjectSession {
         } else {
             duplicateArtboard(sel.artboardID)
         }
+    }
+
+    // MARK: - 右键菜单 / 剪贴板操作
+
+    private var selectedElement: (artboardID: UUID, id: Int)? {
+        guard let sel = selection, let id = sel.elementID else { return nil }
+        return (sel.artboardID, id)
+    }
+
+    func copySelection() {
+        guard let (board, id) = selectedElement else { return }
+        Task {
+            let h = handle(for: board)
+            guard let source = await h.call("return window.__ds.outer(id)", ["id": id]) else { return }
+            let inlined = await h.call("return window.__ds.inlined(id)", ["id": id]) ?? source
+            let clip = ElementClipboard(artboardID: board, source: source, inlined: inlined)
+            elementClipboard = clip
+            clip.write(to: .general)
+        }
+    }
+
+    func cutSelection() {
+        guard selectedElement != nil else { return }
+        copySelection()
+        Task {
+            try? await Task.sleep(for: .milliseconds(80))   // 先完成拷贝再删除
+            deleteSelection()
+        }
+    }
+
+    /// 粘贴：选中元素时放在它后面，选中画板时放进画板；支持应用内元素、图片、HTML 和纯文本
+    func paste() {
+        guard let sel = selection else { return }
+        let html: String
+        if let clip = ElementClipboard.read(from: .general) ?? elementClipboard {
+            html = clip.artboardID == sel.artboardID ? clip.source : clip.inlined
+        } else if let image = NSImage(pasteboard: .general), let png = ImageUtil.pngData(image, maxWidth: 1600) {
+            html = #"<img data-name="图片" alt="" src="data:image/png;base64,\#(png.base64EncodedString())" style="width:\#(Int(min(image.size.width, 320)))px;height:auto;display:block">"#
+        } else if let text = NSPasteboard.general.string(forType: .string)?.trimmed, !text.isEmpty {
+            html = text.hasPrefix("<") ? text
+                : "<p data-name=\"文本\" style=\"margin:0\">\(text.htmlEscaped)</p>"
+        } else {
+            return
+        }
+        if let id = sel.elementID {
+            Task { await edit("return window.__ds.insertAfter(id, h)", ["id": id, "h": html], artboardID: sel.artboardID) }
+        } else {
+            Task { await edit("return window.__ds.insert(h, null, null)", ["h": html], artboardID: sel.artboardID) }
+        }
+    }
+
+    var canPaste: Bool {
+        elementClipboard != nil || ElementClipboard.read(from: .general) != nil
+            || NSImage.canInit(with: .general) || NSPasteboard.general.string(forType: .string) != nil
+    }
+
+    /// 拷贝为 PNG：选中元素（或整个画板）的截图，2 倍分辨率
+    func copySelectionAsPNG() {
+        guard let sel = selection else { return }
+        Task {
+            let h = handle(for: sel.artboardID)
+            var rect: CGRect?
+            if let id = sel.elementID {
+                rect = await h.decode(ElementRect.self, "return window.__ds.rect(id)", ["id": id])?.cgRect
+            }
+            guard let image = await h.snapshot(cssRect: rect, scale: 2) else { return }
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.writeObjects([image])
+        }
+    }
+
+    /// 拷贝为 SVG：样式展开后的元素放进 foreignObject，可以粘贴到 Figma 等工具
+    func copySelectionAsSVG() {
+        guard let (board, id) = selectedElement else { return }
+        Task {
+            let h = handle(for: board)
+            guard let html = await h.call("return window.__ds.inlined(id)", ["id": id]),
+                  let rect = await h.decode(ElementRect.self, "return window.__ds.rect(id)", ["id": id]) else { return }
+            let w = Int(rect.w.rounded(.up)), hgt = Int(rect.h.rounded(.up))
+            let svg = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="\(w)" height="\(hgt)" viewBox="0 0 \(w) \(hgt)">
+              <foreignObject x="0" y="0" width="\(w)" height="\(hgt)">
+                <div xmlns="http://www.w3.org/1999/xhtml">
+            \(html)
+                </div>
+              </foreignObject>
+            </svg>
+            """
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(svg, forType: .string)
+            pb.setData(Data(svg.utf8), forType: NSPasteboard.PasteboardType("public.svg-image"))
+        }
+    }
+
+    /// 拷贝为 HTML：样式展开后的代码，可以单独使用
+    func copySelectionAsHTML() {
+        guard let sel = selection else { return }
+        Task {
+            let text: String?
+            if let id = sel.elementID {
+                text = await handle(for: sel.artboardID).call("return window.__ds.inlined(id)", ["id": id])
+            } else {
+                text = document.artboard(sel.artboardID)?.html
+            }
+            guard let text else { return }
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(text, forType: .string)
+            pb.setString(text, forType: .html)
+        }
+    }
+
+    func copyProperties() {
+        guard let (board, id) = selectedElement else { return }
+        Task {
+            guard let json = await handle(for: board).call("return window.__ds.styleOf(id)", ["id": id]),
+                  let map = try? JSONDecoder().decode([String: String].self, from: Data(json.utf8)) else { return }
+            copiedStyle = map
+        }
+    }
+
+    func pasteProperties() {
+        guard let copiedStyle, selectedElement != nil else { return }
+        setStyle(copiedStyle)
+    }
+
+    func moveSelection(toLast: Bool) {
+        guard let (board, id) = selectedElement else { return }
+        Task { await edit("return window.__ds.moveToEdge(id, l)", ["id": id, "l": toLast], artboardID: board) }
+    }
+
+    func groupSelection() {
+        wrapSelection(#"<div data-name="编组"></div>"#)
+    }
+
+    func ungroupSelection() {
+        guard let (board, id) = selectedElement else { return }
+        Task { await edit("return window.__ds.unwrap(id)", ["id": id], artboardID: board) }
+    }
+
+    func wrapSelection(grid: Bool) {
+        wrapSelection(grid
+            ? #"<div data-name="Grid" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px"></div>"#
+            : #"<div data-name="Flex" style="display:flex;align-items:center;gap:12px"></div>"#)
+    }
+
+    private func wrapSelection(_ wrapper: String) {
+        guard let (board, id) = selectedElement else { return }
+        Task { await edit("return window.__ds.wrap(id, h)", ["id": id, "h": wrapper], artboardID: board) }
+    }
+
+    func flipSelection(horizontal: Bool) {
+        guard let (board, id) = selectedElement else { return }
+        Task { await edit("return window.__ds.flip(id, a)", ["id": id, "a": horizontal ? "x" : "y"], artboardID: board) }
     }
 
     func replaceSelectedElementHTML(_ html: String) {
@@ -730,7 +900,17 @@ final class ProjectSession {
             default: return false
             }
         }
+        if shift, selectedElement != nil {
+            switch k {
+            case "h": flipSelection(horizontal: true); return true
+            case "v": flipSelection(horizontal: false); return true
+            case "a": wrapSelection(grid: false); return true
+            default: break
+            }
+        }
         switch k {
+        case "]" where selectedElement != nil: moveSelection(toLast: true); return true
+        case "[" where selectedElement != nil: moveSelection(toLast: false); return true
         case "backspace", "delete": deleteSelection(); return true
         case "arrowleft" where isFullScreen && !previewShowsAll && selection?.elementID == nil:
             stepFullScreen(-1); return true

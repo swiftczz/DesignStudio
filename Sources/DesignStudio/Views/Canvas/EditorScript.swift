@@ -25,7 +25,7 @@ nonisolated enum EditorScript {
       var maxId = 0;
       var selectedId = null, hoverId = null;
       var editing = null;            // 正在行内编辑文字的元素
-      var drag = null;               // 正在拖动的绝对定位元素
+      var drag = null;               // 按下后可能开始的拖动：move（绝对定位）/ offset（⌥ 自由移动）/ reorder（流式布局里调整顺序）
 
       function post(m){ try { window.webkit.messageHandlers.ds.postMessage(JSON.stringify(m)); } catch(_){} }
       function live(id){ return id == null ? null : document.querySelector('[' + ATTR + '="' + id + '"]'); }
@@ -277,7 +277,7 @@ nonisolated enum EditorScript {
         'gap','padding-top','padding-right','padding-bottom','padding-left','margin-top','margin-right','margin-bottom',
         'margin-left','font-family','font-weight','font-size','line-height','letter-spacing','color','text-align',
         'background-color','background-image','opacity','border-top-left-radius','border-top-width','border-top-style',
-        'border-top-color','box-shadow','left','top','z-index','flex-grow','overflow','object-fit'];
+        'border-top-color','box-shadow','left','top','z-index','flex-grow','overflow','object-fit','font-style','text-decoration-line'];
       function props(id){
         var el = live(id);
         if (!el) return null;
@@ -336,13 +336,69 @@ nonisolated enum EditorScript {
 
       // ---------- 事件 ----------
       // 注意：pointerdown 里调用了 preventDefault，浏览器不会再派发 mousedown / mouseup，所以统一用 pointer 事件
+      function elemSiblings(el){
+        return el.parentElement ? Array.prototype.filter.call(el.parentElement.children, function(c){ return c.hasAttribute(ATTR); }) : [];
+      }
+      // 流式布局里拖动：指针越过相邻元素的中线就把元素移过去（只看与当前位置方向一致的那一侧，不会来回抖动）
+      function reorderTo(el, x, y){
+        var parent = el.parentElement;
+        if (!parent) return false;
+        var pcs = window.getComputedStyle(parent);
+        var isGrid = pcs.display.indexOf('grid') >= 0;
+        var horizontal = pcs.display.indexOf('flex') >= 0 && pcs.flexDirection.indexOf('row') === 0;
+        var best = null, bestD = Infinity;
+        elemSiblings(el).forEach(function(sib){
+          if (sib === el) return;
+          var r = sib.getBoundingClientRect();
+          var cx = Math.max(r.left, Math.min(x, r.right)), cy = Math.max(r.top, Math.min(y, r.bottom));
+          var d = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+          if (d < bestD) { bestD = d; best = sib; }
+        });
+        if (!best) return false;
+        var r = best.getBoundingClientRect();
+        var forward = !!(el.compareDocumentPosition(best) & Node.DOCUMENT_POSITION_FOLLOWING);
+        var inRow = y >= r.top && y <= r.bottom;
+        var past = (horizontal || (isGrid && inRow))
+          ? (forward ? x > r.left + r.width / 2 : x < r.left + r.width / 2)
+          : (forward ? y > r.top + r.height / 2 : y < r.top + r.height / 2);
+        if (!past) return false;
+        if (forward) best.after(el); else best.before(el);
+        return true;
+      }
       document.addEventListener('pointermove', function(e){
         if (mode === 'off' || editing) return;
         if (drag) {
           var dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
-          if (Math.abs(dx) + Math.abs(dy) > 2) drag.moved = true;
-          drag.el.style.left = Math.round(drag.l0 + dx) + 'px';
-          drag.el.style.top = Math.round(drag.t0 + dy) + 'px';
+          if (!drag.started) {
+            if (Math.abs(dx) + Math.abs(dy) < 4) return;
+            drag.started = true;
+            if (drag.selectOnStart) { selectedId = drag.id; post({ type: 'select', props: props(drag.id) }); }
+            if (drag.kind === 'offset' && window.getComputedStyle(drag.el).position === 'static') drag.el.style.position = 'relative';
+            if (drag.kind === 'reorder') {
+              // 拖动时元素跟着指针走（临时的 transform，松手后还原），越过相邻元素的中线时在布局里换位
+              var st = drag.el.style;
+              drag.saved = { transform: st.transform, opacity: st.opacity, zIndex: st.zIndex, position: st.position, transition: st.transition };
+              var r0 = drag.el.getBoundingClientRect();
+              drag.grabX = drag.x0 - r0.left; drag.grabY = drag.y0 - r0.top;
+              drag.tx = 0; drag.ty = 0;
+              st.transition = 'none';
+              st.opacity = '0.85';
+              st.zIndex = '2147483000';
+              if (window.getComputedStyle(drag.el).position === 'static') st.position = 'relative';
+            }
+          }
+          if (drag.kind === 'reorder') {
+            reorderTo(drag.el, e.clientX, e.clientY);
+            // 当前在布局里的位置（去掉临时位移），让元素保持在指针下方
+            var rr = drag.el.getBoundingClientRect();
+            var slotX = rr.left - drag.tx, slotY = rr.top - drag.ty;
+            drag.tx = e.clientX - drag.grabX - slotX;
+            drag.ty = e.clientY - drag.grabY - slotY;
+            drag.el.style.transform = 'translate(' + Math.round(drag.tx) + 'px,' + Math.round(drag.ty) + 'px)' + (drag.saved.transform ? ' ' + drag.saved.transform : '');
+          } else {
+            drag.el.style.left = Math.round(drag.l0 + dx) + 'px';
+            drag.el.style.top = Math.round(drag.t0 + dy) + 'px';
+          }
           post({ type: 'dragging', id: drag.id, rect: rectOf(drag.el) });
           return;
         }
@@ -363,7 +419,7 @@ nonisolated enum EditorScript {
         e.preventDefault(); e.stopPropagation();
         return true;
       }
-      ['mousedown','mouseup','click','auxclick','contextmenu','submit','touchstart','dragstart'].forEach(function(t){
+      ['mousedown','mouseup','click','auxclick','submit','touchstart','dragstart'].forEach(function(t){
         document.addEventListener(t, function(e){ block(e); }, true);
       });
       document.addEventListener('pointerdown', function(e){
@@ -373,26 +429,65 @@ nonisolated enum EditorScript {
         var id = idOf(e.target);
         if (mode === 'comment') { if (id != null) post({ type: 'commentPick', props: props(id) }); return; }
         if (id == null) { selectedId = null; post({ type: 'select', props: null }); return; }
-        var el = live(id);
+        // 在已选中的元素内部按下：拖动时拖的是这个已选中的元素；没拖动就当作点击，选中最里层的元素
+        var dragId = id;
+        var selEl = selectedId != null ? live(selectedId) : null;
+        if (selEl && selEl !== document.body && selEl.contains(e.target)) dragId = selectedId;
+        else if (id !== selectedId) { selectedId = id; post({ type: 'select', props: props(id) }); }
+        var el = live(dragId);
+        if (!el || el === document.body) return;
         var cs = window.getComputedStyle(el);
-        if (id === selectedId && (cs.position === 'absolute' || cs.position === 'fixed')) {
-          drag = { id: id, el: el, x0: e.clientX, y0: e.clientY, l0: parseFloat(cs.left) || 0, t0: parseFloat(cs.top) || 0, moved: false };
-          try { document.documentElement.setPointerCapture(e.pointerId); } catch(_) {}
-          return;
-        }
-        selectedId = id;
-        post({ type: 'select', props: props(id) });
+        var absolute = cs.position === 'absolute' || cs.position === 'fixed';
+        var kind = absolute ? 'move' : (e.altKey ? 'offset' : 'reorder');
+        // 没有可以换位的兄弟元素时，拖动就是自由移动位置
+        if (kind === 'reorder' && elemSiblings(el).length < 2) kind = 'offset';
+        drag = { id: dragId, clickId: id, el: el, kind: kind, x0: e.clientX, y0: e.clientY, started: false,
+                 selectOnStart: dragId !== selectedId,
+                 l0: parseFloat(absolute ? cs.left : el.style.left) || 0, t0: parseFloat(absolute ? cs.top : el.style.top) || 0 };
+        try { document.documentElement.setPointerCapture(e.pointerId); } catch(_) {}
       }, true);
       document.addEventListener('pointerup', function(e){
         if (!block(e)) return;
-        if (drag) {
-          var d = drag; drag = null;
-          if (d.moved) {
-            var s = srcEl(d.id);
-            if (s) { s.style.left = d.el.style.left; s.style.top = d.el.style.top; }
-            post({ type: 'changed', result: JSON.parse(result(d.id, false)) });
-          }
+        if (!drag) return;
+        var d = drag; drag = null;
+        if (!d.started) {
+          // 没拖动：普通点击，选中指针下最里层的元素
+          if (d.clickId !== selectedId) { selectedId = d.clickId; post({ type: 'select', props: props(d.clickId) }); }
+          return;
         }
+        var s = srcEl(d.id);
+        if (!s) return;
+        if (d.kind === 'reorder') {
+          var st = d.el.style, sv = d.saved || {};
+          ['transform', 'opacity', 'zIndex', 'position', 'transition'].forEach(function(k){ st[k] = sv[k] || ''; });
+          if (!d.el.getAttribute('style')) d.el.removeAttribute('style');
+          // 把源码 DOM 里的元素移到与实时页面相同的位置
+          var next = d.el.nextElementSibling;
+          while (next && !next.hasAttribute(ATTR)) next = next.nextElementSibling;
+          var srcNext = next ? srcEl(+next.getAttribute(ATTR)) : null;
+          var srcParent = srcEl(idOf(d.el.parentElement)) || s.parentElement;
+          if (srcNext) srcNext.before(s); else srcParent.appendChild(s);
+          post({ type: 'changed', result: JSON.parse(result(d.id, true)) });
+        } else {
+          if (d.el.style.position) s.style.position = d.el.style.position;
+          s.style.left = d.el.style.left; s.style.top = d.el.style.top;
+          post({ type: 'changed', result: JSON.parse(result(d.id, false)) });
+        }
+      }, true);
+      // 右键：选中元素（在已选中的元素内部右键时保持选中），交给应用弹出菜单
+      document.addEventListener('contextmenu', function(e){
+        if (!block(e) || mode !== 'select') return;
+        if (editing) finishEditing();
+        var id = idOf(e.target);
+        var selEl = selectedId != null ? live(selectedId) : null;
+        if (selEl && selEl !== document.body && selEl.contains(e.target)) id = selectedId;
+        if (id !== selectedId) { selectedId = id; post({ type: 'select', props: id != null ? props(id) : null }); }
+        var info = null;
+        if (id != null) {
+          var el = live(id), sibs = elemSiblings(el), i = sibs.indexOf(el);
+          info = { isFirst: i <= 0, isLast: i === sibs.length - 1, hasChildren: !!el.querySelector('[' + ATTR + ']') };
+        }
+        post({ type: 'contextMenu', id: id, x: e.clientX, y: e.clientY, info: info });
       }, true);
       document.addEventListener('dblclick', function(e){
         if (!block(e) || mode !== 'select') return;
@@ -479,6 +574,67 @@ nonisolated enum EditorScript {
             if (!el.getAttribute('style')) el.removeAttribute('style');
           });
           return result(id, true);
+        },
+        // 右键菜单的编辑操作（实时页面和源码 DOM 同步修改）
+        moveToEdge: function(id, last){
+          both(id, function(el){
+            var p = el.parentElement; if (!p) return;
+            if (last) p.appendChild(el); else p.insertBefore(el, p.firstChild);
+          });
+          return result(id, true);
+        },
+        wrap: function(id, html){
+          var a = live(id), b = srcEl(id);
+          var wa = fragment(html, document), wb = fragment(html, src || document);
+          if (!a || !b || !wa || !wb) return result(id, false);
+          var nid = stamp(wa, wb);
+          a.before(wa); wa.appendChild(a);
+          b.before(wb); wb.appendChild(b);
+          selectedId = nid;
+          return result(nid, true);
+        },
+        unwrap: function(id){
+          var a = live(id), b = srcEl(id);
+          if (!a || !b || !a.parentElement || !b.parentElement) return result(id, false);
+          var first = a.querySelector('[' + ATTR + ']');
+          var firstId = first ? +first.getAttribute(ATTR) : null;
+          [a, b].forEach(function(el){
+            while (el.firstChild) el.parentNode.insertBefore(el.firstChild, el);
+            el.remove();
+          });
+          selectedId = firstId;
+          return result(firstId, true);
+        },
+        flip: function(id, axis){
+          var token = axis === 'x' ? 'scaleX(-1)' : 'scaleY(-1)';
+          both(id, function(el){
+            var t = el.style.transform || '';
+            t = t.indexOf(token) >= 0 ? t.replace(token, '').replace(/\s+/g, ' ').trim() : (t + ' ' + token).trim();
+            if (t) el.style.transform = t; else el.style.removeProperty('transform');
+            if (!el.getAttribute('style')) el.removeAttribute('style');
+          });
+          return result(id, false);
+        },
+        insertAfter: function(id, html){
+          var a = live(id), b = srcEl(id);
+          var na = fragment(html, document), nb = fragment(html, src || document);
+          if (!a || !b || !na || !nb) return result(null, false);
+          var nid = stamp(na, nb);
+          a.after(na); b.after(nb);
+          selectedId = nid;
+          return result(nid, true);
+        },
+        // 拷贝属性：元素最终生效的样式（不含定位相关的属性），粘贴时作为行内样式写入
+        styleOf: function(id){
+          var el = live(id), s = srcEl(id); if (!el || !s) return null;
+          var skip = /^(position|left|top|right|bottom|inset|z-index|order|grid-(area|row|column).*|margin.*|translate)$/;
+          var out = {};
+          cascade(el, s.getAttribute('style') || '', false).forEach(function(d){
+            var i = d.indexOf(': ');
+            var name = d.slice(0, i), value = d.slice(i + 2);
+            if (!skip.test(name)) out[name] = value;
+          });
+          return JSON.stringify(out);
         },
         setText: function(id, text){ both(id, function(el){ el.textContent = text; }); return result(id, true); },
         setAttr: function(id, name, value){

@@ -10,6 +10,23 @@ struct InfiniteCanvasView: View {
 
     /// 浮动工具栏距画布上下边缘的距离（顶部控制条与底部工具栏对称）
     static let edgeInset: CGFloat = 18
+    @State private var textBarSize = CGSize(width: 460, height: 38)
+
+    /// 格式工具栏的位置：选中元素上方居中；上方放不下（被顶部控制条挡住）时放到下方尺寸标签之下，左右不超出画布
+    private func textBarPlacement(viewport: CGSize) -> (props: ElementProps, origin: CGPoint)? {
+        guard !session.interactivePreview, !session.isEditingText, session.tool == .select,
+              let sel = session.selection, sel.elementID != nil,
+              let props = session.selectedProps, props.id == sel.elementID, props.hasText,
+              !session.streamingArtboardIDs.contains(sel.artboardID),
+              let board = session.currentPage?.artboards.first(where: { $0.id == sel.artboardID }) else { return nil }
+        let r = props.rect
+        let rect = session.viewRect(CGRect(x: board.x + r.x, y: board.y + r.y, width: r.w, height: r.h))
+        let w = textBarSize.width, h = textBarSize.height
+        var y = rect.minY - h - 12
+        if y < 64 { y = rect.maxY + 34 }
+        let x = min(max(rect.midX - w / 2, 12), max(viewport.width - w - 12, 12))
+        return (props, CGPoint(x: x, y: y))
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -32,6 +49,14 @@ struct InfiniteCanvasView: View {
 
                 if session.tool.capturesPointer && session.isEditable && !session.interactivePreview {
                     ToolCaptureLayer(session: session)
+                }
+
+                // 选中文字时，元素上方出现格式工具栏
+                if let placement = textBarPlacement(viewport: geo.size) {
+                    TextFormatBar(session: session, props: placement.props)
+                        .onGeometryChange(for: CGSize.self) { $0.size } action: { textBarSize = $0 }
+                        .offset(x: placement.origin.x, y: placement.origin.y)
+                        .transition(.opacity)
                 }
 
                 if let pending = session.pendingComment {
@@ -57,6 +82,7 @@ struct InfiniteCanvasView: View {
         .focusable()
         .focusEffectDisabled()
         .focused($focused)
+        .onChange(of: focused) { _, now in session.canvasFocused = now }
         .onKeyPress(phases: .down) { press in
             let key: String = switch press.key {
             case .delete: "backspace"

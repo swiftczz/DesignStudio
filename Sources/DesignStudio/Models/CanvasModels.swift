@@ -176,6 +176,17 @@ nonisolated struct EditorMessage: Decodable, Sendable {
     var shift: Bool?
     var alt: Bool?
     var ctrl: Bool?
+    /// 右键位置（画板内的 CSS 坐标）与元素信息
+    var x: Double?
+    var y: Double?
+    var info: ContextInfo?
+}
+
+/// 右键菜单需要的元素信息（决定哪些菜单项可用）
+nonisolated struct ContextInfo: Codable, Hashable, Sendable {
+    var isFirst: Bool
+    var isLast: Bool
+    var hasChildren: Bool
 }
 
 /// 元素类型的显示名称与图标

@@ -117,6 +117,21 @@ final class ArtboardHandle {
         return try? await webView.takeSnapshot(configuration: config)
     }
 
+    /// 截取画板的一部分（CSS 坐标；nil 为整个画板），输出图片的尺寸等于 CSS 尺寸（Retina 屏上为 2 倍像素）
+    func snapshot(cssRect: CGRect?, scale: Double = 1) async -> NSImage? {
+        guard let webView else { return nil }
+        let viewScale = (webView as? CanvasWebView)?.canvasScale ?? 1
+        let config = WKSnapshotConfiguration()
+        if let r = cssRect {
+            config.rect = CGRect(x: r.minX * viewScale, y: r.minY * viewScale,
+                                 width: r.width * viewScale, height: r.height * viewScale)
+            config.snapshotWidth = NSNumber(value: r.width * scale)
+        } else {
+            config.snapshotWidth = NSNumber(value: webView.bounds.width / viewScale * scale)
+        }
+        return try? await webView.takeSnapshot(configuration: config)
+    }
+
     func pdf() async throws -> Data {
         guard let webView else { throw LLMError.cli("画板尚未加载") }
         return try await webView.pdf(configuration: WKPDFConfiguration())
@@ -221,6 +236,17 @@ struct ArtboardWebView: NSViewRepresentable {
             }
         }
 
+        /// 在右键位置弹出画布菜单（选中已由之前的 select 消息更新）
+        private func showContextMenu(_ msg: EditorMessage, in webView: WKWebView?) {
+            guard let session, let web = webView ?? handle.webView else { return }
+            let scale = (web as? CanvasWebView)?.canvasScale ?? 1
+            let x = (msg.x ?? 0) * scale, y = (msg.y ?? 0) * scale
+            let point = NSPoint(x: x, y: web.isFlipped ? y : web.bounds.height - y)
+            let menu = CanvasContextMenu.make(session: session, info: msg.info)
+            // 等这次脚本消息处理完再弹出（菜单会进入自己的事件循环）
+            DispatchQueue.main.async { menu.popUp(positioning: nil, at: point, in: web) }
+        }
+
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             initialize()   // 兜底：正常情况下 ready 消息更早到达
         }
@@ -235,6 +261,7 @@ struct ArtboardWebView: NSViewRepresentable {
             guard let json = message.body as? String,
                   let msg = try? JSONDecoder().decode(EditorMessage.self, from: Data(json.utf8)) else { return }
             if msg.type == "ready" { initialize(); return }
+            if msg.type == "contextMenu" { showContextMenu(msg, in: message.webView); return }
             session?.handleEditorMessage(msg, from: handle.artboardID)
         }
     }

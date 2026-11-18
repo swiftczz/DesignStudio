@@ -65,6 +65,24 @@ struct AppCommands: Commands {
             Button("重做") { app.performUndo(redo: true) }
                 .keyboardShortcut("z", modifiers: [.command, .shift])
         }
+        // 剪切 / 拷贝 / 粘贴：文字输入框里照常处理文字，画布有焦点时处理画布上的元素
+        CommandGroup(replacing: .pasteboard) {
+            Button("剪切") { app.performPasteboard(.cut) }
+                .keyboardShortcut("x")
+            Button("拷贝") { app.performPasteboard(.copy) }
+                .keyboardShortcut("c")
+            Button("粘贴") { app.performPasteboard(.paste) }
+                .keyboardShortcut("v")
+            Button("全选") { app.performPasteboard(.selectAll) }
+                .keyboardShortcut("a")
+            Divider()
+            Button("拷贝为 PNG") { app.performCanvasCommand { $0.copySelectionAsPNG() } }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+            Button("拷贝属性") { app.performCanvasCommand { $0.copyProperties() } }
+                .keyboardShortcut("c", modifiers: [.command, .option])
+            Button("粘贴属性") { app.performCanvasCommand { $0.pasteProperties() } }
+                .keyboardShortcut("v", modifiers: [.command, .option])
+        }
         CommandMenu("设计") {
             Button("批注工具") { app.activeSession?.tool = .comment }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
@@ -75,6 +93,10 @@ struct AppCommands: Commands {
             Divider()
             Button("复制选中") { app.activeSession?.duplicateSelection() }
                 .keyboardShortcut("d", modifiers: .command)
+            Button("编组") { app.performCanvasCommand { $0.groupSelection() } }
+                .keyboardShortcut("g", modifiers: .command)
+            Button("取消编组") { app.performCanvasCommand { $0.ungroupSelection() } }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
             Button("新建画板") { app.activeSession?.addArtboard() }
             Button("新建页面") { app.activeSession?.addPage() }
             Divider()
