@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# 把 SPM 可执行文件打包成可双击运行的 DesignStudio.app
+# 把 SPM 可执行文件打包成适用于 Apple 芯片的 DesignStudio.app
 # 用法：./Scripts/build-app.sh [release|debug]
 #
 # 可选环境变量（发布脚本 release-dmg.sh 会设置，本地开发不用管）：
-#   ARCHS="arm64 x86_64"   编译的架构，默认只编当前机器的架构
 #   SIGN_IDENTITY="..."    签名身份；默认 "-"（ad-hoc）。给 Developer ID 时启用 Hardened Runtime 与时间戳
 #   VERSION="1.2.0"        写入 CFBundleShortVersionString
 #   BUILD_NUMBER="42"      写入 CFBundleVersion
@@ -11,16 +10,19 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 CONFIG="${1:-release}"
+ARCH="arm64"
 APP_NAME="DesignStudio"
 APP="build/${APP_NAME}.app"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 
-ARCH_FLAGS=()
-for arch in ${ARCHS:-}; do ARCH_FLAGS+=(--arch "$arch"); done
-
-echo "▶︎ swift build -c ${CONFIG} ${ARCH_FLAGS[*]:-}"
-swift build -c "${CONFIG}" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
-BIN_DIR="$(swift build -c "${CONFIG}" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --show-bin-path)"
+echo "▶︎ swift build -c ${CONFIG} --arch ${ARCH}"
+swift build -c "${CONFIG}" --arch "${ARCH}"
+BIN_DIR="$(swift build -c "${CONFIG}" --arch "${ARCH}" --show-bin-path)"
+BIN_ARCHS="$(lipo -archs "${BIN_DIR}/${APP_NAME}")"
+if [ "${BIN_ARCHS}" != "${ARCH}" ]; then
+  echo "✗ 预期架构为 ${ARCH}，实际为 ${BIN_ARCHS}" >&2
+  exit 1
+fi
 
 rm -rf "${APP}"
 mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"

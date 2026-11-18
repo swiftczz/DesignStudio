@@ -59,7 +59,7 @@ jobs:
           2. 应用目前没有 Developer ID 签名。第一次打开如果被拦下，请到「系统设置 → 隐私与安全性」底部点「仍要打开」；
              或在终端运行 `xattr -dr com.apple.quarantine /Applications/DesignStudio.app`。
 
-          系统要求：macOS 26 或更新版本（Apple 芯片与 Intel 通用）。
+          系统要求：搭载 Apple 芯片的 Mac，运行 macOS 26 或更新版本。
           NOTE
           echo "=== changelog ==="
           cat CHANGELOG.md

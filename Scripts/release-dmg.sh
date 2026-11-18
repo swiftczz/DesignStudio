@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 打包发布用的 DMG：通用二进制（Apple 芯片 + Intel）→ 签名 →（可选）公证 → dist/DesignStudio-<版本>.dmg
+# 打包发布用的 DMG：Apple 芯片（arm64）→ 签名 →（可选）公证 → dist/DesignStudio-<版本>.dmg
 #
 # 用法：
 #   ./Scripts/release-dmg.sh                 # 版本号取 Support/Info.plist
@@ -14,8 +14,6 @@
 #   先保存一次凭据：xcrun notarytool store-credentials designstudio-notary \
 #                     --apple-id 你的AppleID --team-id TEAMID --password App专用密码
 #   再运行：NOTARY_PROFILE=designstudio-notary ./Scripts/release-dmg.sh 1.2.0
-#
-# 其他：UNIVERSAL=0 只编当前机器的架构（更快，Intel Mac 用不了）
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -44,9 +42,7 @@ else
 fi
 
 # ---------- 编译并打包 .app ----------
-ARCHS="arm64 x86_64"
-[ "${UNIVERSAL:-1}" = "0" ] && ARCHS=""
-ARCHS="${ARCHS}" SIGN_IDENTITY="${SIGN_IDENTITY}" VERSION="${VERSION}" BUILD_NUMBER="${BUILD_NUMBER}" \
+SIGN_IDENTITY="${SIGN_IDENTITY}" VERSION="${VERSION}" BUILD_NUMBER="${BUILD_NUMBER}" \
   ./Scripts/build-app.sh release
 
 echo "▶︎ 检查签名"
@@ -74,7 +70,7 @@ DesignStudio ${VERSION} 安装说明
    打开「系统设置 → 隐私与安全性」，滚动到底部，在 DesignStudio 旁点「仍要打开」，再确认一次即可。
    （也可以在终端运行：xattr -dr com.apple.quarantine /Applications/DesignStudio.app）
 
-系统要求：macOS 26 或更新版本。
+系统要求：搭载 Apple 芯片的 Mac，运行 macOS 26 或更新版本。
 使用 Claude / Codex / Antigravity 账号登录生成设计时，需要先安装对应的命令行工具（claude / codex / agy），
 在应用的「设置 → 模型与账号」里可以看到安装命令；也可以直接填写 DeepSeek、OpenAI 等服务商的 API Key。
 EOF

@@ -38,11 +38,11 @@
 xattr -dr com.apple.quarantine /Applications/DesignStudio.app
 ```
 
-系统要求：macOS 26 Tahoe 及以上（Apple 芯片与 Intel 通用）。
+系统要求：搭载 Apple 芯片的 Mac，运行 macOS 26 Tahoe 或更新版本。
 
 ## 环境要求
 
-- macOS 26 Tahoe 及以上
+- 搭载 Apple 芯片的 Mac，运行 macOS 26 Tahoe 或更新版本
 - Xcode 26 及以上（Swift 6.2+ 工具链；Swift 6 语言模式，默认 MainActor 隔离）
 
 ## 运行
@@ -58,7 +58,7 @@ open Package.swift          # 选择 DesignStudio scheme → Run
 ./Scripts/build-app.sh
 open build/DesignStudio.app
 
-# 打包发布用的 DMG（通用二进制，输出到 dist/）
+# 打包发布用的 DMG（arm64，输出到 dist/）
 ./Scripts/release-dmg.sh 0.1.0
 
 # 运行单元测试
@@ -154,7 +154,7 @@ Sources/DesignStudio
 
 ## 发布
 
-推送 `v*` tag 会触发 GitHub Actions（`.github/workflows/release.yml`）：运行测试 → 按 Conventional Commits 生成更新说明 → 编译通用 DMG → 发布到 Releases。
+推送 `v*` tag 会触发 GitHub Actions（`.github/workflows/release.yml`）：运行测试 → 按 Conventional Commits 生成更新说明 → 编译 arm64 DMG → 发布到 Releases。
 
 ```bash
 git tag v0.2.0
