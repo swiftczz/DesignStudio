@@ -140,7 +140,7 @@ private struct SidebarFooter: View {
         return app.providers.filter { p in
             guard p.kind.isCLI, seen.insert(p.kind).inserted else { return false }
             switch app.auth.state(p.kind) {
-            case .loggedOut, .notInstalled, .failed: return true
+            case .loggedOut, .notInstalled, .failed, .broken: return true
             default: return false
             }
         }
@@ -175,6 +175,7 @@ private struct SidebarFooter: View {
         let short = switch state {
         case .notInstalled: "未安装"
         case .failed: "检测失败"
+        case .broken: "安装不完整"
         default: "未登录"
         }
         return OpenSettingsButton {

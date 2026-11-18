@@ -551,3 +551,44 @@ struct EffortParamTests {
         #expect(ProviderProfile.claudeCode().resolved(model: nil).effort == "")
     }
 }
+
+
+@Suite("命令行工具安装诊断")
+struct CLIDiagnosisTests {
+    /// 用户截图里的实际输出：npm 全局安装缺少 Apple 芯片的平台包
+    static let codexBroken = """
+    file:///usr/local/lib/node_modules/@openai/codex/bin/codex.js:108
+      throw new Error(
+            ^
+    Error: Missing optional dependency @openai/codex-darwin-arm64. Reinstall Codex: npm install -g @openai/codex@latest
+        at findCodexExecutable (file:///usr/local/lib/node_modules/@openai/codex/bin/codex.js:108:9)
+    Node.js v25.2.1
+    """
+
+    @Test func detectsBrokenNPMInstall() {
+        #expect(CLIDiagnosis.reinstallCommand(for: Self.codexBroken, kind: .codex) == "npm install -g @openai/codex@latest")
+        let error = CodexProvider.classify(Self.codexBroken)
+        #expect(error.localizedDescription.contains("npm install -g @openai/codex@latest"))
+        #expect(!error.localizedDescription.contains("findCodexExecutable"))
+    }
+
+    /// 用一个假的 codex（输出同样的报错并以 1 退出）跑真实的状态检测
+    @MainActor @Test func refreshReportsBrokenInsteadOfLoggedOut() async throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "ds-fake-codex-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fake = dir.appending(path: "codex")
+        try "#!/bin/sh\ncat >&2 <<'EOF'\n\(Self.codexBroken)\nEOF\nexit 1\n".write(to: fake, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+
+        let auth = CLIAuthService()
+        await auth.refresh(.codex, executable: fake.path)
+        #expect(auth.state(.codex) == .broken(fix: "npm install -g @openai/codex@latest"))
+        #expect(auth.state(.codex).label == "安装不完整")
+    }
+
+    @Test func normalLoggedOutIsNotBroken() {
+        #expect(CLIDiagnosis.reinstallCommand(for: "Not logged in", kind: .codex) == nil)
+        #expect(CLIDiagnosis.reinstallCommand(for: "zsh: command not found: codex", kind: .codex) == nil)
+    }
+}

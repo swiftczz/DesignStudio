@@ -138,6 +138,7 @@ nonisolated struct ClaudeCodeProvider: LLMProvider {
     }
 
     static func classify(_ message: String) -> LLMError {
+        if let hint = CLIDiagnosis.brokenInstallMessage(message, kind: .claudeCode, name: "Claude Code") { return .cli(hint) }
         let lower = message.lowercased()
         if lower.contains("/login") || lower.contains("not logged in") || lower.contains("invalid api key")
             || lower.contains("authentication") || lower.contains("oauth") {

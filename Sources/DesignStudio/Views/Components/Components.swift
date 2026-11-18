@@ -680,7 +680,7 @@ struct AuthStateBadge: View {
         switch state {
         case .loggedIn: .green
         case .loggedOut: .orange
-        case .notInstalled, .failed: .red
+        case .notInstalled, .failed, .broken: .red
         default: .gray
         }
     }

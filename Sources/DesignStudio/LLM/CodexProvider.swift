@@ -163,6 +163,7 @@ nonisolated struct CodexProvider: LLMProvider {
     }
 
     static func classify(_ message: String) -> LLMError {
+        if let hint = CLIDiagnosis.brokenInstallMessage(message, kind: .codex, name: "Codex") { return .cli(hint) }
         let lower = message.lowercased()
         if lower.contains("login") || lower.contains("unauthorized") || lower.contains("401")
             || lower.contains("not authenticated") || lower.contains("re-authenticate") {

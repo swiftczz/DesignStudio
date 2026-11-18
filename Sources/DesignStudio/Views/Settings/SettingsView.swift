@@ -550,6 +550,26 @@ struct AccountSection: View {
                     Spacer()
                     Button("取消") { auth.cancelLogin(kind) }
                 }
+            } else if case .broken(let fix) = state {
+                // 装上了但跑不起来：登录按钮没用，直接给修复命令
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("`\(exe)` 已安装但无法运行（安装不完整，常见于缺少当前芯片对应的组件）。重新安装后点刷新：")
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(fix)
+                        .font(.callout.monospaced())
+                        .textSelection(.enabled)
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.quaternary, in: .rect(cornerRadius: 6))
+                    HStack(spacing: 10) {
+                        Button("在终端中重新安装") { auth.openTerminalRepair(kind, command: fix) }
+                        if fix.hasPrefix("npm ") {
+                            Text("提示权限不足时，在命令前加 sudo")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             } else if state == .notInstalled {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("没有找到 `\(exe)`。在终端中安装后点击刷新：")
