@@ -147,6 +147,8 @@ nonisolated struct ElementProps: Codable, Hashable, Sendable {
     var selector: String
     var parentId: Int?
     var childCount: Int
+    /// 用「编组」创建的容器（可以取消编组）
+    var isGroup: Bool?
 
     func css(_ key: String) -> String { style[key] ?? "" }
     func inlineCSS(_ key: String) -> String { inline[key] ?? "" }
@@ -161,6 +163,13 @@ nonisolated struct EditResult: Codable, Sendable {
     var props: ElementProps?
     var source: String?
     var tree: [ElementNode]?
+    var multi: [SelectedElement]?
+}
+
+/// 多选中的一个元素
+nonisolated struct SelectedElement: Codable, Hashable, Sendable {
+    var id: Int
+    var rect: ElementRect
 }
 
 /// 编辑脚本通过 postMessage 发来的消息
@@ -180,6 +189,8 @@ nonisolated struct EditorMessage: Decodable, Sendable {
     var x: Double?
     var y: Double?
     var info: ContextInfo?
+    /// ⇧ 点击多选时的全部元素（少于 2 个时为空）
+    var multi: [SelectedElement]?
 }
 
 /// 右键菜单需要的元素信息（决定哪些菜单项可用）
@@ -187,6 +198,8 @@ nonisolated struct ContextInfo: Codable, Hashable, Sendable {
     var isFirst: Bool
     var isLast: Bool
     var hasChildren: Bool
+    var isGroup: Bool?
+    var count: Int?
 }
 
 /// 元素类型的显示名称与图标
@@ -201,6 +214,7 @@ nonisolated enum ElementKind {
         case "grid": "网格"
         case "row": "横排"
         case "column": "竖排"
+        case "group": "编组"
         default: "容器"
         }
     }
@@ -215,6 +229,7 @@ nonisolated enum ElementKind {
         case "grid": "square.grid.2x2"
         case "row": "rectangle.split.3x1"
         case "column": "rectangle.split.1x2"
+        case "group": "square.on.square.dashed"
         default: "square.dashed"
         }
     }

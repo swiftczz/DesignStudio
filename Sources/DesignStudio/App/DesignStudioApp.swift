@@ -95,8 +95,10 @@ struct AppCommands: Commands {
                 .keyboardShortcut("d", modifiers: .command)
             Button("编组") { app.performCanvasCommand { $0.groupSelection() } }
                 .keyboardShortcut("g", modifiers: .command)
+                .disabled(!(app.activeSession?.canGroup ?? false))
             Button("取消编组") { app.performCanvasCommand { $0.ungroupSelection() } }
                 .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(!(app.activeSession?.canUngroup ?? false))
             Button("新建画板") { app.activeSession?.addArtboard() }
             Button("新建页面") { app.activeSession?.addPage() }
             Divider()

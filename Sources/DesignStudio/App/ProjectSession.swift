@@ -40,6 +40,8 @@ final class ProjectSession {
     var tool: CanvasTool = .select
     var selection: CanvasSelection?
     var selectedProps: ElementProps?
+    /// ⇧ 点击多选的元素（同一个画板里，2 个及以上时才有值）
+    var multiSelection: [SelectedElement] = []
     var hover: CanvasHover?
     /// 正在画板里行内编辑文字（这时 ⌘C / ⌘V 交给网页处理文字）
     var isEditingText = false
@@ -310,6 +312,7 @@ final class ProjectSession {
     func select(_ target: CanvasSelection?) {
         selection = target
         selectedProps = nil
+        multiSelection = []
         guard let target else { return }
         if let id = target.elementID {
             expandAncestors(of: id, in: target.artboardID)
@@ -322,6 +325,7 @@ final class ProjectSession {
     func clearSelection() {
         selection = nil
         selectedProps = nil
+        multiSelection = []
         pendingComment = nil
     }
 
@@ -385,6 +389,7 @@ final class ProjectSession {
             isEditingText = true
         case "select":
             isEditingText = false
+            multiSelection = msg.multi ?? []
             if let p = msg.props {
                 selection = CanvasSelection(artboardID: artboardID, elementID: p.id)
                 selectedProps = p
@@ -420,6 +425,7 @@ final class ProjectSession {
 
     private func apply(_ r: EditResult, artboardID: UUID) {
         if let tree = r.tree { trees[artboardID] = tree }
+        multiSelection = r.multi ?? []
         if let source = r.source {
             let clean = HTMLAnnotator.strip(source)
             handle(for: artboardID).loadedSource = clean   // 网页已是最新状态，不必重新加载
@@ -461,7 +467,10 @@ final class ProjectSession {
 
     func deleteSelection() {
         guard isEditable, let sel = selection else { return }
-        if let id = sel.elementID {
+        if multiSelection.count > 1 {
+            let ids = multiSelection.map(\.id)
+            Task { await edit("return window.__ds.removeMany(ids)", ["ids": ids], artboardID: sel.artboardID) }
+        } else if let id = sel.elementID {
             Task { await edit("return window.__ds.remove(id)", ["id": id], artboardID: sel.artboardID) }
         } else {
             deleteArtboard(sel.artboardID)
@@ -608,13 +617,23 @@ final class ProjectSession {
         Task { await edit("return window.__ds.moveToEdge(id, l)", ["id": id, "l": toLast], artboardID: board) }
     }
 
+    /// 编组和取消编组同时只有一个可用：选中的是编组时只能取消编组，否则只能编组（多选时总是编组）
+    var canGroup: Bool {
+        multiSelection.count > 1 || (selectedElement != nil && selectedProps?.isGroup != true)
+    }
+    var canUngroup: Bool {
+        multiSelection.count <= 1 && selectedElement != nil && selectedProps?.isGroup == true
+    }
+
     func groupSelection() {
-        wrapSelection(#"<div data-name="编组"></div>"#)
+        guard canGroup, let (board, id) = selectedElement else { return }
+        let ids = multiSelection.count > 1 ? multiSelection.map(\.id) : [id]
+        Task { await edit("return window.__ds.groupMany(ids)", ["ids": ids], artboardID: board) }
     }
 
     func ungroupSelection() {
-        guard let (board, id) = selectedElement else { return }
-        Task { await edit("return window.__ds.unwrap(id)", ["id": id], artboardID: board) }
+        guard canUngroup, let (board, id) = selectedElement else { return }
+        Task { await edit("return window.__ds.ungroup(id)", ["id": id], artboardID: board) }
     }
 
     func wrapSelection(grid: Bool) {

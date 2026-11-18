@@ -24,6 +24,7 @@ nonisolated enum EditorScript {
       var src = null;                // 源码 DOM
       var maxId = 0;
       var selectedId = null, hoverId = null;
+      var selectedIds = [];          // ⇧ 点击多选时的全部元素（最后一个为主选中，与 selectedId 相同）
       var editing = null;            // 正在行内编辑文字的元素
       var drag = null;               // 按下后可能开始的拖动：move（绝对定位）/ offset（⌥ 自由移动）/ reorder（流式布局里调整顺序）
 
@@ -197,7 +198,33 @@ nonisolated enum EditorScript {
         }
         return open + '\n' + elems.map(function(c){ return pretty(c, depth + 1); }).join('\n') + '\n' + pad + '</' + t + '>';
       }
-      function rectOf(el){ var r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; }
+      function rectOf(el){
+        // 编组是 display:contents，本身没有盒子：用子元素的范围
+        if (window.getComputedStyle(el).display === 'contents') {
+          var l = Infinity, t = Infinity, rr = -Infinity, b = -Infinity;
+          Array.prototype.forEach.call(el.children, function(c){
+            var q = rectOf(c); if (!q.w && !q.h) return;
+            l = Math.min(l, q.x); t = Math.min(t, q.y); rr = Math.max(rr, q.x + q.w); b = Math.max(b, q.y + q.h);
+          });
+          if (l === Infinity) return { x: 0, y: 0, w: 0, h: 0 };
+          return { x: l, y: t, w: rr - l, h: b - t };
+        }
+        var r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height };
+      }
+      function isGroup(el){ return !!el && el.hasAttribute('data-group'); }
+      // 多选：主选中变了（单击、脚本编辑）时，多选集合回到只有它一个
+      function syncIds(){
+        if (selectedId == null) selectedIds = [];
+        else if (selectedIds.indexOf(selectedId) < 0) selectedIds = [selectedId];
+      }
+      function multiInfo(){
+        syncIds();
+        if (selectedIds.length < 2) return null;
+        return selectedIds.map(function(id){ var el = live(id); return el ? { id: id, rect: rectOf(el) } : null; }).filter(Boolean);
+      }
+      function postSelect(id){
+        post({ type: 'select', props: id != null ? props(id) : null, multi: multiInfo() });
+      }
 
       var INLINE = ['br','b','strong','i','em','span','small','sup','sub','code','mark','u','s','a','label'];
       function isTextLeaf(el){
@@ -210,6 +237,7 @@ nonisolated enum EditorScript {
       }
       function kindOf(el){
         var t = el.tagName.toLowerCase();
+        if (isGroup(el)) return 'group';
         if (['img','svg','picture','canvas','video'].indexOf(t) >= 0) return 'image';
         if (t === 'button' || el.getAttribute('role') === 'button') return 'button';
         if (['input','textarea','select'].indexOf(t) >= 0) return 'input';
@@ -292,13 +320,14 @@ nonisolated enum EditorScript {
                  text: isTextLeaf(el) ? (s.textContent || '') : null,
                  rect: rectOf(el), style: style, inline: inline,
                  src: el.getAttribute('src') || '', href: el.getAttribute('href') || '',
-                 selector: selectorFor(el), parentId: idOf(el.parentElement), childCount: el.children.length };
+                 selector: selectorFor(el), parentId: idOf(el.parentElement), childCount: el.children.length,
+                 isGroup: isGroup(el) };
       }
 
       function serialize(){ return src ? '<!DOCTYPE html>\n' + src.documentElement.outerHTML : null; }
       function both(id, fn){ var a = live(id), b = srcEl(id); if (a) fn(a); if (b) fn(b); }
       function result(id, withTree){
-        var r = { id: id, props: id != null ? props(id) : null, source: serialize() };
+        var r = { id: id, props: id != null ? props(id) : null, source: serialize(), multi: multiInfo() };
         if (withTree) r.tree = tree();
         return JSON.stringify(r);
       }
@@ -428,7 +457,25 @@ nonisolated enum EditorScript {
         if (editing) finishEditing();
         var id = idOf(e.target);
         if (mode === 'comment') { if (id != null) post({ type: 'commentPick', props: props(id) }); return; }
-        if (id == null) { selectedId = null; post({ type: 'select', props: null }); return; }
+        if (id == null) { selectedId = null; selectedIds = []; post({ type: 'select', props: null }); return; }
+        // ⇧ / ⌘ 点击：加入 / 移出多选（不拖动）
+        if ((e.shiftKey || e.metaKey) && mode === 'select') {
+          syncIds();
+          var at = selectedIds.indexOf(id);
+          if (at >= 0) selectedIds.splice(at, 1);
+          else {
+            // 不能同时选中元素和它的父 / 子元素：去掉有包含关系的那些
+            var target = live(id);
+            selectedIds = selectedIds.filter(function(x){ var o = live(x); return o && !o.contains(target) && !target.contains(o); });
+            selectedIds.push(id);
+          }
+          selectedId = selectedIds.length ? selectedIds[selectedIds.length - 1] : null;
+          postSelect(selectedId);
+          return;
+        }
+        // 普通点击会结束多选
+        syncIds();
+        if (selectedIds.length > 1) { selectedIds = [id]; selectedId = id; postSelect(id); }
         // 在已选中的元素内部按下：拖动时拖的是这个已选中的元素；没拖动就当作点击，选中最里层的元素
         var dragId = id;
         var selEl = selectedId != null ? live(selectedId) : null;
@@ -479,13 +526,17 @@ nonisolated enum EditorScript {
         if (!block(e) || mode !== 'select') return;
         if (editing) finishEditing();
         var id = idOf(e.target);
+        syncIds();
+        var inMulti = selectedIds.length > 1 && selectedIds.some(function(x){ var o = live(x); return o && o.contains(e.target); });
         var selEl = selectedId != null ? live(selectedId) : null;
-        if (selEl && selEl !== document.body && selEl.contains(e.target)) id = selectedId;
-        if (id !== selectedId) { selectedId = id; post({ type: 'select', props: id != null ? props(id) : null }); }
+        if (inMulti) id = selectedId;
+        else if (selEl && selEl !== document.body && selEl.contains(e.target)) id = selectedId;
+        if (!inMulti && (id !== selectedId || selectedIds.length > 1)) { selectedId = id; selectedIds = id != null ? [id] : []; postSelect(id); }
         var info = null;
         if (id != null) {
           var el = live(id), sibs = elemSiblings(el), i = sibs.indexOf(el);
-          info = { isFirst: i <= 0, isLast: i === sibs.length - 1, hasChildren: !!el.querySelector('[' + ATTR + ']') };
+          info = { isFirst: i <= 0, isLast: i === sibs.length - 1, hasChildren: !!el.querySelector('[' + ATTR + ']'),
+                   isGroup: isGroup(el), count: Math.max(selectedIds.length, 1) };
         }
         post({ type: 'contextMenu', id: id, x: e.clientX, y: e.clientY, info: info });
       }, true);
@@ -540,7 +591,7 @@ nonisolated enum EditorScript {
         },
         setMode: setMode,
         tree: function(){ return JSON.stringify(tree()); },
-        props: function(id){ selectedId = id; return JSON.stringify(props(id)); },
+        props: function(id){ selectedId = id; selectedIds = id != null ? [id] : []; return JSON.stringify(props(id)); },
         rect: function(id){ var el = live(id); return el ? JSON.stringify(rectOf(el)) : null; },
         locate: function(selector){
           try { var el = document.querySelector(selector); var id = idOf(el); return id == null ? null : JSON.stringify({ id: id, rect: rectOf(live(id)) }); }
@@ -593,18 +644,6 @@ nonisolated enum EditorScript {
           selectedId = nid;
           return result(nid, true);
         },
-        unwrap: function(id){
-          var a = live(id), b = srcEl(id);
-          if (!a || !b || !a.parentElement || !b.parentElement) return result(id, false);
-          var first = a.querySelector('[' + ATTR + ']');
-          var firstId = first ? +first.getAttribute(ATTR) : null;
-          [a, b].forEach(function(el){
-            while (el.firstChild) el.parentNode.insertBefore(el.firstChild, el);
-            el.remove();
-          });
-          selectedId = firstId;
-          return result(firstId, true);
-        },
         flip: function(id, axis){
           var token = axis === 'x' ? 'scaleX(-1)' : 'scaleY(-1)';
           both(id, function(el){
@@ -640,6 +679,38 @@ nonisolated enum EditorScript {
         setAttr: function(id, name, value){
           both(id, function(el){ if (value === '' || value == null) el.removeAttribute(name); else el.setAttribute(name, value); });
           return result(id, true);
+        },
+        // 编组：把一个或多个元素（按文档顺序）放进 display:contents 的容器，不改变原来的布局
+        groupMany: function(ids){
+          var pairs = ids.map(function(id){ return { a: live(id), b: srcEl(id) }; }).filter(function(p){ return p.a && p.b; });
+          if (!pairs.length) return result(selectedId, false);
+          pairs.sort(function(x, y){ return (x.a.compareDocumentPosition(y.a) & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1; });
+          var html = '<div data-name="编组" data-group="" style="display:contents"></div>';
+          var wa = fragment(html, document), wb = fragment(html, src || document);
+          var nid = stamp(wa, wb);
+          pairs[0].a.before(wa); pairs[0].b.before(wb);
+          pairs.forEach(function(p){ wa.appendChild(p.a); wb.appendChild(p.b); });
+          selectedId = nid; selectedIds = [nid];
+          return result(nid, true);
+        },
+        // 取消编组：子元素放回原处，并全部选中
+        ungroup: function(id){
+          var a = live(id), b = srcEl(id);
+          if (!a || !b || !isGroup(a)) return result(id, false);
+          var kids = Array.prototype.filter.call(a.children, function(c){ return c.hasAttribute(ATTR); })
+            .map(function(c){ return +c.getAttribute(ATTR); });
+          [a, b].forEach(function(el){
+            while (el.firstChild) el.parentNode.insertBefore(el.firstChild, el);
+            el.remove();
+          });
+          selectedIds = kids;
+          selectedId = kids.length ? kids[kids.length - 1] : null;
+          return result(selectedId, true);
+        },
+        removeMany: function(ids){
+          ids.forEach(function(id){ both(id, function(el){ el.remove(); }); });
+          selectedId = null; selectedIds = [];
+          return result(null, true);
         },
         remove: function(id){
           both(id, function(el){ el.remove(); });

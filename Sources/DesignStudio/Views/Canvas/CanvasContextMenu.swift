@@ -40,6 +40,7 @@ enum CanvasContextMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
         let isElement = session.selection?.elementID != nil
+        let multi = session.multiSelection.count > 1
 
         func add(_ title: String, _ key: String = "", _ mods: NSEvent.ModifierFlags = [.command],
                  enabled: Bool = true, destructive: Bool = false, _ action: @escaping () -> Void) {
@@ -53,6 +54,19 @@ enum CanvasContextMenu {
                 item.attributedTitle = NSAttributedString(string: title, attributes: [.foregroundColor: NSColor.systemRed])
             }
             menu.addItem(item)
+        }
+
+        if multi {
+            // 多选：只提供对全部元素都有意义的操作
+            let header = NSMenuItem(title: "已选 \(session.multiSelection.count) 个元素", action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            menu.addItem(header)
+            menu.addItem(.separator())
+            add("编组", "g") { session.groupSelection() }
+            add("取消编组", "g", [.command, .shift], enabled: false) {}
+            menu.addItem(.separator())
+            add("删除", "\u{8}", [], destructive: true) { session.deleteSelection() }
+            return menu
         }
 
         add("询问 AI…", "j", enabled: session.canAskAboutSelection) { session.showAskAI = true }
@@ -75,8 +89,9 @@ enum CanvasContextMenu {
             menu.addItem(.separator())
             add("移到最后", "]", [], enabled: !(info?.isLast ?? true)) { session.moveSelection(toLast: true) }
             add("移到最前", "[", [], enabled: !(info?.isFirst ?? true)) { session.moveSelection(toLast: false) }
-            add("编组", "g") { session.groupSelection() }
-            add("取消编组", "g", [.command, .shift], enabled: info?.hasChildren ?? false) { session.ungroupSelection() }
+            // 编组与取消编组同时只有一个可用
+            add("编组", "g", enabled: session.canGroup) { session.groupSelection() }
+            add("取消编组", "g", [.command, .shift], enabled: session.canUngroup) { session.ungroupSelection() }
             add("水平翻转", "H", [.shift]) { session.flipSelection(horizontal: true) }
             add("垂直翻转", "V", [.shift]) { session.flipSelection(horizontal: false) }
             menu.addItem(.separator())

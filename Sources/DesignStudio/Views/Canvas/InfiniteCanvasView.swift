@@ -15,6 +15,7 @@ struct InfiniteCanvasView: View {
     /// 格式工具栏的位置：选中元素上方居中；上方放不下（被顶部控制条挡住）时放到下方尺寸标签之下，左右不超出画布
     private func textBarPlacement(viewport: CGSize) -> (props: ElementProps, origin: CGPoint)? {
         guard !session.interactivePreview, !session.isEditingText, session.tool == .select,
+              session.multiSelection.count < 2,
               let sel = session.selection, sel.elementID != nil,
               let props = session.selectedProps, props.id == sel.elementID, props.hasText,
               !session.streamingArtboardIDs.contains(sel.artboardID),
@@ -285,7 +286,19 @@ private struct SelectionLayer: View {
             }
 
             if let sel = session.selection, let board = session.currentPage?.artboards.first(where: { $0.id == sel.artboardID }) {
-                if sel.elementID != nil, let props = session.selectedProps, let rect = elementRect(board.id, props.rect) {
+                if session.multiSelection.count > 1 {
+                    // 多选：每个元素一个细框，外面一个整体的选中框，标签显示数量
+                    let rects = session.multiSelection.compactMap { elementRect(board.id, $0.rect) }
+                    ForEach(Array(rects.enumerated()), id: \.offset) { _, r in
+                        Rectangle()
+                            .strokeBorder(CanvasPalette.selection, lineWidth: 1)
+                            .frame(width: max(r.width, 1), height: max(r.height, 1))
+                            .offset(x: r.minX, y: r.minY)
+                    }
+                    if let union = rects.dropFirst().reduce(rects.first, { $0?.union($1) }) {
+                        SelectionBox(rect: union.insetBy(dx: -3, dy: -3), label: "已选 \(rects.count) 个")
+                    }
+                } else if sel.elementID != nil, let props = session.selectedProps, let rect = elementRect(board.id, props.rect) {
                     SelectionBox(rect: rect, label: "\(Int(props.rect.w.rounded())) × \(Int(props.rect.h.rounded()))")
                 } else if sel.elementID == nil {
                     SelectionBox(rect: session.viewRect(board.frame),
