@@ -514,6 +514,7 @@ struct AntigravityTests {
         let models = ModelCatalog.parseAntigravityModels(out)
         #expect(models.map(\.id) == ["gemini-4-carbon-medium", "claude-sonnet-4-6"])
         #expect(models.first?.title == "Gemini 4 Carbon (Medium)")
+        #expect(ModelCatalog.parseAntigravityModels("Fetching available models...\n").isEmpty)
     }
 
     @Test func stdinMessageIsOneNDJSONLine() throws {
@@ -530,7 +531,7 @@ struct AntigravityTests {
         #expect(p.kind.isCLI)
         #expect(p.cliExecutable == "agy")
         #expect(ProviderBrand.detect(p) == .antigravity)
-        #expect(!p.modelOptions.isEmpty)
+        #expect(p.model.isEmpty)
     }
 }
 
