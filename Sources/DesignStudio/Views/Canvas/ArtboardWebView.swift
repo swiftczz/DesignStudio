@@ -12,13 +12,11 @@ final class CanvasWebView: WKWebView {
     override init(frame: CGRect, configuration: WKWebViewConfiguration) {
         super.init(frame: frame, configuration: configuration)
         disableAutomaticContentInsets()
-        configureScaling()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         disableAutomaticContentInsets()
-        configureScaling()
     }
 
     /// 布局尺寸 = 视图尺寸 ÷ viewScale（_WKLayoutModeDynamicSizeComputedFromViewScale = 2）。
@@ -29,7 +27,7 @@ final class CanvasWebView: WKWebView {
         return WKWebView.instancesRespond(to: probe) && WKWebView.instancesRespond(to: scale)
     }()
 
-    private func configureScaling() {
+    func configurePreviewScaling() {
         guard Self.usesViewScale else { return }
         let selector = NSSelectorFromString("_setLayoutMode:")
         typealias Setter = @convention(c) (AnyObject, Selector, UInt) -> Void
@@ -68,6 +66,37 @@ final class CanvasWebView: WKWebView {
     /// 画板网页的尺寸完全由画布决定（画板宽高 × 缩放），不提供固有尺寸
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+    }
+}
+
+/// 编辑画板始终以原始尺寸排版。外层 frame 随画布缩放，bounds 和网页视口保持原始尺寸。
+final class ArtboardViewport: NSView {
+    let webView: CanvasWebView
+
+    override var isFlipped: Bool { true }
+
+    init(webView: CanvasWebView, artboardSize: CGSize) {
+        self.webView = webView
+        super.init(frame: CGRect(origin: .zero, size: artboardSize))
+        clipsToBounds = true
+        webView.autoresizingMask = []
+        addSubview(webView)
+        setArtboardSize(artboardSize)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func setArtboardSize(_ size: CGSize) {
+        let rect = CGRect(origin: .zero, size: size)
+        if bounds != rect { bounds = rect }
+        if webView.frame != rect { webView.frame = rect }
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let layoutBounds = bounds
+        super.setFrameSize(newSize)
+        if bounds != layoutBounds { bounds = layoutBounds }
     }
 }
 
@@ -120,14 +149,12 @@ final class ArtboardHandle {
     /// 截取画板的一部分（CSS 坐标；nil 为整个画板），输出图片的尺寸等于 CSS 尺寸（Retina 屏上为 2 倍像素）
     func snapshot(cssRect: CGRect?, scale: Double = 1) async -> NSImage? {
         guard let webView else { return nil }
-        let viewScale = (webView as? CanvasWebView)?.canvasScale ?? 1
         let config = WKSnapshotConfiguration()
         if let r = cssRect {
-            config.rect = CGRect(x: r.minX * viewScale, y: r.minY * viewScale,
-                                 width: r.width * viewScale, height: r.height * viewScale)
+            config.rect = r
             config.snapshotWidth = NSNumber(value: r.width * scale)
         } else {
-            config.snapshotWidth = NSNumber(value: webView.bounds.width / viewScale * scale)
+            config.snapshotWidth = NSNumber(value: webView.bounds.width * scale)
         }
         return try? await webView.takeSnapshot(configuration: config)
     }
@@ -138,7 +165,7 @@ final class ArtboardHandle {
     }
 }
 
-/// 画布上渲染一个画板的 WKWebView：按画布缩放设置 viewScale，让 CSS 视口始终等于画板尺寸
+/// 编辑画板：AppKit 缩放整个网页，WebKit 的布局与元素边界保持在画板坐标中。
 struct ArtboardWebView: NSViewRepresentable {
     let artboard: Artboard
     let zoom: Double
@@ -151,7 +178,7 @@ struct ArtboardWebView: NSViewRepresentable {
         Coordinator(handle: session.handle(for: artboard.id), session: session)
     }
 
-    func makeNSView(context: Context) -> WKWebView {
+    func makeNSView(context: Context) -> ArtboardViewport {
         let config = WKWebViewConfiguration()
         let ucc = WKUserContentController()
         // WKUserContentController 会强引用消息处理者，用弱引用代理避免循环引用
@@ -166,33 +193,35 @@ struct ArtboardWebView: NSViewRepresentable {
         web.allowsMagnification = false
         web.allowsBackForwardNavigationGestures = false
         web.underPageBackgroundColor = .white
-        web.canvasScale = zoom
+        let viewport = ArtboardViewport(webView: web, artboardSize: artboard.frame.size)
         context.coordinator.handle.webView = web
         context.coordinator.handle.mode = mode
         context.coordinator.load(artboard.html, in: web)
-        return web
+        return viewport
     }
 
     /// 始终占满画布给出的尺寸（画板宽高 × 缩放）
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: WKWebView, context: Context) -> CGSize? {
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: ArtboardViewport, context: Context) -> CGSize? {
         CGSize(width: proposal.width ?? artboard.width * zoom, height: proposal.height ?? artboard.height * zoom)
     }
 
-    func updateNSView(_ web: WKWebView, context: Context) {
+    func updateNSView(_ viewport: ArtboardViewport, context: Context) {
+        viewport.setArtboardSize(artboard.frame.size)
+        let web = viewport.webView
         let c = context.coordinator
         c.session = session
         if c.handle.webView !== web { c.handle.webView = web }
         if c.handle.loadedSource != artboard.html {
             c.load(artboard.html, in: web)
         }
-        (web as? CanvasWebView)?.canvasScale = zoom
         if c.handle.mode != mode {
             c.handle.mode = mode
             c.handle.run("window.__ds && window.__ds.setMode(m)", ["m": mode.rawValue])
         }
     }
 
-    static func dismantleNSView(_ web: WKWebView, coordinator: Coordinator) {
+    static func dismantleNSView(_ viewport: ArtboardViewport, coordinator: Coordinator) {
+        let web = viewport.webView
         web.configuration.userContentController.removeScriptMessageHandler(forName: "ds")
         web.navigationDelegate = nil
         coordinator.handle.isReady = false
@@ -239,8 +268,7 @@ struct ArtboardWebView: NSViewRepresentable {
         /// 在右键位置弹出画布菜单（选中已由之前的 select 消息更新）
         private func showContextMenu(_ msg: EditorMessage, in webView: WKWebView?) {
             guard let session, let web = webView ?? handle.webView else { return }
-            let scale = (web as? CanvasWebView)?.canvasScale ?? 1
-            let x = (msg.x ?? 0) * scale, y = (msg.y ?? 0) * scale
+            let x = msg.x ?? 0, y = msg.y ?? 0
             let point = NSPoint(x: x, y: web.isFlipped ? y : web.bounds.height - y)
             let menu = CanvasContextMenu.make(session: session, info: msg.info)
             // 等这次脚本消息处理完再弹出（菜单会进入自己的事件循环）
@@ -292,6 +320,7 @@ struct PreviewWebView: NSViewRepresentable {
         ucc.addUserScript(WKUserScript(source: EditorScript.errorHook, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         config.userContentController = ucc
         let web = CanvasWebView(frame: .zero, configuration: config)
+        web.configurePreviewScaling()
         web.canvasScale = zoom
         web.isInspectable = true
         web.loadHTMLString(HTMLAnnotator.nonBlockingStylesheets(html), baseURL: ArtboardWebView.baseURL)

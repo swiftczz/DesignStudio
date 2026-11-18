@@ -17,21 +17,7 @@ final class ProjectSession {
     var currentPageID: UUID?
 
     // MARK: 视口
-    var zoom: Double = 0.5 {
-        didSet { if zoom != oldValue { scheduleSelectionRefresh() } }
-    }
-    @ObservationIgnored private var selectionRefreshTask: Task<Void, Never>?
-
-    /// 缩放停下后重新读取选中元素的位置：画板排版与缩放无关，但网页字体等资源晚到也可能让元素移动
-    private func scheduleSelectionRefresh() {
-        selectionRefreshTask?.cancel()
-        guard let target = selection, target.elementID != nil else { return }
-        selectionRefreshTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled, let self else { return }
-            await self.refreshProps(target)
-        }
-    }
+    var zoom: Double = 0.5
     var pan: CGPoint = CGPoint(x: 80, y: 120)
     var viewportSize: CGSize = .zero
     @ObservationIgnored private var didInitialFit = false

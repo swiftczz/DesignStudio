@@ -260,10 +260,11 @@ struct AskAIBar: View {
                     .onSubmit(send)
                 ProviderMenu(selection: providerBinding, showsLogo: false, maximumTitleWidth: 225)
                 Button(action: send) {
-                    Image(systemName: "arrow.up").fontWeight(.semibold)
+                    Image(systemName: "arrow.up")
                 }
-                .buttonStyle(SoftIconButtonStyle(prominent: true))
+                .buttonStyle(SendButtonStyle())
                 .disabled(!session.canAsk)
+                .help("发送（Return；⌥Return 换行）")
             }
         }
         .padding(12)
