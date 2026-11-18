@@ -50,15 +50,20 @@ codesign --verify --deep --strict "${APP}"
 echo "   架构：$(lipo -archs "${APP}/Contents/MacOS/${APP_NAME}")"
 
 # ---------- 组装 DMG 内容 ----------
-STAGE="$(mktemp -d)"
-RW_DMG="$(mktemp -u).dmg"
-MOUNT=""
+WORK_DIR="$(mktemp -d)"
+STAGE="${WORK_DIR}/stage"
+RW_DMG="${WORK_DIR}/writable.dmg"
+MOUNT="${WORK_DIR}/mount"
+MOUNTED=false
 cleanup() {
-  [ -n "${MOUNT}" ] && hdiutil detach "${MOUNT}" -quiet -force 2>/dev/null || true
-  rm -rf "${STAGE}" "${RW_DMG}"
+  if [ "${MOUNTED}" = true ]; then
+    diskutil eject "${MOUNT}" >/dev/null || return
+  fi
+  rm -rf "${WORK_DIR}"
 }
 trap cleanup EXIT
 
+mkdir "${STAGE}"
 cp -R "${APP}" "${STAGE}/"
 ln -s /Applications "${STAGE}/Applications"
 if [ "${SIGN_IDENTITY}" = "-" ]; then
@@ -80,15 +85,16 @@ fi
 mkdir -p dist
 rm -f "${DMG}"
 hdiutil create -quiet -volname "${APP_NAME} ${VERSION}" -srcfolder "${STAGE}" -fs HFS+ -format UDRW "${RW_DMG}"
-MOUNT="$(hdiutil attach -readwrite -noverify -noautoopen -nobrowse "${RW_DMG}" | sed -n 's#.*\(/Volumes/.*\)$#\1#p' | tail -n 1)"
-if [ -n "${MOUNT}" ] && [ -f Support/AppIcon.icns ]; then
+diskutil image attach --mountOptions nobrowse --mountPoint "${MOUNT}" "${RW_DMG}" >/dev/null
+MOUNTED=true
+if [ -f Support/AppIcon.icns ]; then
   cp Support/AppIcon.icns "${MOUNT}/.VolumeIcon.icns"
   SetFile -c icnC "${MOUNT}/.VolumeIcon.icns" 2>/dev/null || true
   SetFile -a C "${MOUNT}" 2>/dev/null || true
 fi
 sync
-hdiutil detach "${MOUNT}" -quiet
-MOUNT=""
+diskutil eject "${MOUNT}" >/dev/null
+MOUNTED=false
 hdiutil convert -quiet "${RW_DMG}" -format UDZO -imagekey zlib-level=9 -o "${DMG}"
 
 if [ "${SIGN_IDENTITY}" != "-" ]; then

@@ -60,8 +60,8 @@ open Package.swift          # 选择 DesignStudio scheme → Run
 ./Scripts/build-app.sh
 open build/DesignStudio.app
 
-# 打包发布用的 DMG（arm64，输出到 dist/）
-./Scripts/release-dmg.sh 0.1.0
+# 打包 DMG（arm64，默认读取 Support/Info.plist 中的版本号，输出到 dist/）
+./Scripts/release-dmg.sh
 
 # 运行单元测试
 swift test
@@ -160,10 +160,7 @@ Sources/DesignStudio
 
 发布时，工作流使用仓库的 `SPARKLE_PRIVATE_ED_KEY` Actions secret 为 DMG 和 `appcast.xml` 签名，上传两者后再公开 Release。签名私钥必须与 `Support/Info.plist` 中的 `SUPublicEDKey` 配对。本机的签名密钥保存在钥匙串的 `app.designstudio.mac` Sparkle 账户中。
 
-```bash
-git tag v0.2.0
-git push origin v0.2.0
-```
+发布前更新 `Support/Info.plist` 中的两个版本字段，并用相同版本创建和推送 `v` 开头的 tag。手动运行发布工作流时填写版本号，生成的 DMG 会作为工作流产物上传。
 
 本地有 Developer ID Application 证书时，`release-dmg.sh` 会自动用它签名；设置 `NOTARY_PROFILE`（`xcrun notarytool store-credentials` 保存的凭据名）后还会提交公证。
 
