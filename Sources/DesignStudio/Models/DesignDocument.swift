@@ -116,6 +116,9 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
             }
 
             if let i = target {
+                let current = page.artboards[i]
+                guard current.html != html || (out.width ?? current.width) != current.width
+                    || (out.height ?? current.height) != current.height else { continue }
                 page.artboards[i].html = html
                 if let w = out.width { page.artboards[i].width = w }
                 if let h = out.height { page.artboards[i].height = h }

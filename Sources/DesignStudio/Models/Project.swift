@@ -130,6 +130,14 @@ nonisolated struct ChatAttachment: Codable, Identifiable, Sendable, Equatable {
     var filename: String
     var mimeType: String
     var data: Data
+    /// 用于将后续粘贴的同一路径与已导入的文档匹配
+    var sourcePath: String?
+
+    var isImage: Bool { mimeType.hasPrefix("image/") }
+    var documentText: String? {
+        guard mimeType == "text/markdown" || mimeType == "text/plain" else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
 
     var fileExtension: String {
         switch mimeType {

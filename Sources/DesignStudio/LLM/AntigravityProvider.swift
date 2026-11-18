@@ -24,11 +24,7 @@ nonisolated struct AntigravityProvider: LLMProvider {
                     // 与 Codex 一样：只要文字回复，不要动文件或执行命令（输出格式必须与 instructions 里的约定一致）
                     prompt += "\n\nIMPORTANT: Do not run commands and do not create or edit files. "
                         + "Reply directly in this message, following the output contract in <instructions>: "
-                    prompt += request.elementEdit
-                        ? "this is an element edit — output exactly one ```html element code block containing "
-                            + "the complete modified element, not the whole artboard."
-                        : "one ```html artboard=\"<name>\" width=<px> height=<px> code block per artboard. "
-                            + "Never draw several screens or slides inside one wide artboard."
+                    prompt += request.replyFormatReminder
 
                     var args = ["--input-format", "stream-json", "--output-format", "stream-json"]
                     if !profile.model.trimmed.isEmpty { args += ["--model", profile.model.trimmed] }

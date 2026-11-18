@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// GUI 应用默认拿不到终端里的 PATH，这里补全常见安装位置，并通过登录 shell 启动命令
 nonisolated enum ShellEnvironment {
@@ -81,11 +82,18 @@ nonisolated enum CLIRunner {
 
     static func stream(_ executable: String, _ arguments: [String],
                        stdin: String? = nil, cwd: URL? = nil) -> AsyncThrowingStream<CLILine, Error> {
+        stream(makeProcess(executable: executable, arguments: arguments, cwd: cwd), stdin: stdin,
+               name: executable)
+    }
+
+    static func stream(_ process: Process, stdin: String? = nil, inputPipe: Pipe? = nil,
+                       name: String) -> AsyncThrowingStream<CLILine, Error> {
         AsyncThrowingStream { continuation in
-            let process = makeProcess(executable: executable, arguments: arguments, cwd: cwd)
             let outPipe = Pipe()
             let errPipe = Pipe()
-            let inPipe = Pipe()
+            let inPipe = inputPipe ?? Pipe()
+            // CLI 可能在握手前就退出（例如旧版不认识 app-server）。让写入抛错而非触发 SIGPIPE。
+            _ = fcntl(inPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
             process.standardOutput = outPipe
             process.standardError = errPipe
             process.standardInput = inPipe
@@ -130,7 +138,7 @@ nonisolated enum CLIRunner {
             } catch {
                 outPipe.fileHandleForReading.readabilityHandler = nil
                 errPipe.fileHandleForReading.readabilityHandler = nil
-                continuation.finish(throwing: LLMError.notInstalled(executable))
+                continuation.finish(throwing: LLMError.notInstalled(name))
                 return
             }
 
@@ -140,7 +148,7 @@ nonisolated enum CLIRunner {
                     try? writer.write(contentsOf: Data(stdin.utf8))
                     try? writer.close()
                 }
-            } else {
+            } else if inputPipe == nil {
                 try? writer.close()
             }
 

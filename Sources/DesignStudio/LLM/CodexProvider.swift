@@ -1,7 +1,7 @@
 import Foundation
 
-/// 通过官方 Codex CLI 调用：`codex exec --json --skip-git-repo-check --sandbox read-only`
-/// 登录由 `codex login`（ChatGPT 账号）完成。提示词从 stdin 传入。
+/// 使用官方 Codex CLI 的 app-server，旧版 CLI 或自定义参数走 codex exec。
+/// 登录由 `codex login`（ChatGPT 账号）完成。
 nonisolated struct CodexProvider: LLMProvider {
     let profile: ProviderProfile
 
@@ -11,17 +11,27 @@ nonisolated struct CodexProvider: LLMProvider {
             let task = Task {
                 do {
                     let workdir = try TempWorkspace.make(prefix: "codex")
+                    defer { try? FileManager.default.removeItem(at: workdir) }
                     let images = try TempWorkspace.writeImages(request.latestImages, to: workdir)
 
                     var prompt = request.flattenedPrompt(includeSystem: true)
                     // 注意：不要在这里另立输出格式，必须与 instructions 里的画板协议一致（每个画板一个代码块）
                     prompt += "\n\nIMPORTANT: Do not run shell commands and do not create or edit files. "
                         + "Reply directly in this message, following the output contract in <instructions>: "
-                    prompt += request.elementEdit
-                        ? "this is an element edit — output exactly one ```html element code block containing "
-                            + "the complete modified element, not the whole artboard."
-                        : "one ```html artboard=\"<name>\" width=<px> height=<px> code block per artboard. "
-                            + "Never draw several screens or slides inside one wide artboard."
+                    prompt += request.replyFormatReminder
+                    let extra = ArgumentSplitter.split(profile.extraArguments)
+                    continuation.yield(.status("正在启动 Codex…"))
+                    // 自定义 exec 参数可能只适用于旧入口，按原方式传递。
+                    if extra.isEmpty {
+                        do {
+                            try await CodexAppServer.stream(profile: profile, workdir: workdir, images: images,
+                                                            prompt: prompt, into: continuation)
+                            continuation.finish()
+                            return
+                        } catch CodexAppServer.Unavailable.startup {
+                            try Task.checkCancellation()
+                        }
+                    }
 
                     var args = [
                         "exec",
@@ -31,7 +41,6 @@ nonisolated struct CodexProvider: LLMProvider {
                         "-C", workdir.path
                     ]
                     if !profile.model.trimmed.isEmpty { args += ["-m", profile.model.trimmed] }
-                    let extra = ArgumentSplitter.split(profile.extraArguments)
                     // 要求返回推理摘要，才能在对话里展示思维链
                     if !extra.contains(where: { $0.contains("model_reasoning_summary") }) {
                         args += ["-c", "model_reasoning_summary=\"detailed\""]
@@ -40,6 +49,7 @@ nonisolated struct CodexProvider: LLMProvider {
                         args += ["-c", "model_reasoning_effort=\"\(profile.effort)\""]
                     }
                     args += extra
+                    args += ["-c", "service_tier=\"default\""]
                     if !images.isEmpty {
                         args += ["--image", images.map(\.path).joined(separator: ",")]
                     }
@@ -48,7 +58,6 @@ nonisolated struct CodexProvider: LLMProvider {
                     var emittedAny = false
                     var stderr = ""
                     var lastItemID: String?
-                    continuation.yield(.status("正在启动 Codex…"))
 
                     func emitAgentText(id: String, text: String) {
                         let already = emittedByItem[id] ?? 0
@@ -152,7 +161,6 @@ nonisolated struct CodexProvider: LLMProvider {
                             }
                         }
                     }
-                    try? FileManager.default.removeItem(at: workdir)
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)

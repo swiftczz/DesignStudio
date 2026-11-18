@@ -9,13 +9,13 @@
 | 来源 | 登录 / 鉴权方式 | 说明 |
 | --- | --- | --- |
 | **Claude 账号** | 官方 Claude Code CLI：`claude auth login` | 支持 Pro / Max 订阅或 Console 账号，额度走你自己的账号 |
-| **Codex / ChatGPT 账号** | 官方 Codex CLI：`codex login` | 用 ChatGPT 账号登录，`codex exec` 只读沙箱调用 |
+| **Codex / ChatGPT 账号** | 官方 Codex CLI：`codex login` | 用 ChatGPT 账号登录，在只读沙箱中流式生成 |
 | **Antigravity / Google 账号** | Google Antigravity CLI：首次运行 `agy` 时登录 | 使用 Google AI 订阅额度，`agy -p` 非交互调用 |
 | **第三方 API** | API Key（本地 `secrets.json`） | 接口类型可切换：OpenAI Chat Completions / OpenAI Responses / Anthropic Messages；支持 OpenAI、OpenRouter、DeepSeek、Kimi、通义百炼、硅基流动、智谱、Ollama 本地等 |
 
 ## 功能
 
-- **主页**：选择设计系统与模型，附加参考图，一句话开工
+- **参考附件**：在主页或主聊天输入框通过回形针添加图片、Markdown 或纯文本，也支持拖放。在输入框行首粘贴 `.md`、`.markdown` 或 `.txt` 的本地绝对路径时，路径后可接设计需求。文档内容作为对话附件发送给所选模型
 - **无限画布**：每个界面 / 每页幻灯片是一个画板，全部摊开在画布上；双指滑动或滚轮平移，捏合或 ⌘ + 滚轮缩放（⌘= / ⌘- / ⌘0，⌘1 适应画布，⌘2 缩放到选中）；支持多页面；生成时画板**实时渲染**
 - **直接编辑**：点击选中任意元素，双击直接改文字，拖动绝对定位元素；右侧属性面板可改尺寸、定位、自动布局、内外边距、文字、填充、圆角、描边、阴影、图片等；⌘Z 撤销 / ⇧⌘Z 重做，⌘D 复制，⌫ 删除
 - **图层结构**：右侧展示整个作品的组织结构（页面 → 画板 → 元素），与画布选中联动
@@ -83,7 +83,7 @@ swift test
 
 1. 安装：`npm install -g @openai/codex`（或 `brew install --cask codex`）
 2. 点「使用 ChatGPT 登录」（后台运行 `codex login`）
-3. 生成时调用 `codex exec --json --sandbox read-only --skip-git-repo-check`，提示词从 stdin 传入
+3. 生成时通过 `codex app-server` 接收正文增量。旧版 CLI 或配置了自定义 CLI 参数时使用 `codex exec --json`。两个入口都以 Standard 速度运行。
 
 ### Antigravity 账号
 

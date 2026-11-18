@@ -326,6 +326,13 @@ nonisolated enum EditorScript {
 
       function serialize(){ return src ? '<!DOCTYPE html>\n' + src.documentElement.outerHTML : null; }
       function both(id, fn){ var a = live(id), b = srcEl(id); if (a) fn(a); if (b) fn(b); }
+      function setInlineStyle(el, map){
+        Object.keys(map).forEach(function(k){
+          var v = map[k];
+          if (v === '' || v == null) el.style.removeProperty(k); else el.style.setProperty(k, v);
+        });
+        if (!el.getAttribute('style')) el.removeAttribute('style');
+      }
       function result(id, withTree){
         var r = { id: id, props: id != null ? props(id) : null, source: serialize(), multi: multiInfo() };
         if (withTree) r.tree = tree();
@@ -617,12 +624,15 @@ nonisolated enum EditorScript {
           return pretty(c, 0);
         },
         setStyle: function(id, map){
-          both(id, function(el){
-            Object.keys(map).forEach(function(k){
-              var v = map[k];
-              if (v === '' || v == null) el.style.removeProperty(k); else el.style.setProperty(k, v);
-            });
-            if (!el.getAttribute('style')) el.removeAttribute('style');
+          both(id, function(el){ setInlineStyle(el, map); });
+          return result(id, true);
+        },
+        patchElement: function(id, text, style){
+          var a = live(id), b = srcEl(id);
+          if (!a || !b || (text !== null && (a.childElementCount || b.childElementCount))) return null;
+          [a, b].forEach(function(el){
+            if (text !== null) el.textContent = text;
+            if (style !== null) setInlineStyle(el, style);
           });
           return result(id, true);
         },

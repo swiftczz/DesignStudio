@@ -27,8 +27,7 @@ struct LiveElementEditTests {
         let block = try #require(ArtboardParser.element(text))
         #expect(block.complete)
         #expect(ArtboardParser.parse(text).isEmpty)
-        #expect(block.html.hasPrefix("<section"))
-        #expect(block.html.contains("晨间唤醒"))
+        checkBackgroundEdit(block.html, isPatch: block.isPatch)
     }
 
     /// Antigravity CLI：stdin NDJSON 输入、stream-json 输出，按元素修改只返回一个元素代码块
@@ -54,7 +53,19 @@ struct LiveElementEditTests {
         print("STATUS >>> \(statuses)\nREPLY >>>\n\(text)\n<<<")
         let block = try #require(ArtboardParser.element(text))
         #expect(block.complete)
-        #expect(block.html.contains("晨间唤醒"))
+        #expect(ArtboardParser.parse(text).isEmpty)
+        checkBackgroundEdit(block.html, isPatch: block.isPatch)
+    }
+
+    private func checkBackgroundEdit(_ content: String, isPatch: Bool) {
+        if isPatch {
+            let patch = ElementPatch.parse(content)
+            #expect(patch?.style?.keys.contains { $0 == "background" || $0 == "background-color" } == true)
+            #expect(patch?.text == nil)
+        } else {
+            #expect(content.hasPrefix("<section"))
+            #expect(content.contains("晨间唤醒"))
+        }
     }
 }
 

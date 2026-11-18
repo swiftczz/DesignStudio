@@ -94,12 +94,13 @@ final class ProjectSession {
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var wasCancelled = false
     @ObservationIgnored private var lastLiveUpdate = Date.distantPast
+    @ObservationIgnored private var streamingArtifactStarted = false
     @ObservationIgnored private var generationPageID: UUID?
     @ObservationIgnored private var generationTarget: UUID?
     /// 从空白页面开始生成：新画板出现时自动缩放到能看全
     @ObservationIgnored private var generationStartedEmpty = false
     /// 元素级修改的目标（生成结束后用模型返回的元素替换它）
-    @ObservationIgnored private var generationElement: CanvasSelection?
+    @ObservationIgnored private var generationElement: (selection: CanvasSelection, source: String)?
     @ObservationIgnored private var needsThumbnail = false
 
     init(app: AppModel, projectID: UUID) {
@@ -998,7 +999,13 @@ final class ProjectSession {
 
         let text = (useSelection ? askDraft : draft).trimmed
         let comments = useSelection ? [] : pendingComments
-        let attachments = useSelection ? [] : draftAttachments
+        let attachments: [ChatAttachment]
+        do {
+            attachments = useSelection ? [] : try AttachmentImporter.includingPastedDocuments(in: text, attachments: draftAttachments)
+        } catch {
+            ExportService.presentError("无法读取参考文件", error)
+            return
+        }
         let pageID = currentPageID
         let target = useSelection ? selection : nil
         let props = target?.elementID != nil && selectedProps?.id == target?.elementID ? selectedProps : nil
@@ -1017,7 +1024,7 @@ final class ProjectSession {
 
         Task {
             var context: DesignPrompt.SelectionContext?
-            var elementTarget: CanvasSelection?
+            var elementTarget: (selection: CanvasSelection, source: String)?
             if let target, let board = document.artboard(target.artboardID) {
                 var desc: String?
                 var html: String?
@@ -1028,10 +1035,12 @@ final class ProjectSession {
                 // <html>/<body>/<head> 不能整体替换；过大的元素也退回整画板修改
                 let replaceable = props.map { !["html", "body", "head"].contains($0.tag.lowercased()) } ?? false
                 let elementEdit = replaceable && (html.map { !$0.isEmpty && $0.count <= 60_000 } ?? false)
-                if elementEdit { elementTarget = target }
-                context = DesignPrompt.SelectionContext(artboardName: board.name, elementDescription: desc,
-                                                        elementHTML: html, elementEdit: elementEdit)
+                if elementEdit { elementTarget = (target, board.html) }
+                context = DesignPrompt.SelectionContext(artboardName: board.name, artboardID: board.id,
+                                                        elementDescription: desc, elementHTML: html,
+                                                        elementEdit: elementEdit, computedStyle: props?.style ?? [:])
             }
+            guard !isGenerating else { return }
             var snapshot = project
             snapshot.document = document
             let request = DesignPrompt.makeRequest(
@@ -1040,17 +1049,18 @@ final class ProjectSession {
                 newMessage: userMessage,
                 profile: profile,
                 pageID: pageID,
-                selection: context
+                selection: context,
+                commentsOnly: text.isEmpty && attachments.isEmpty
             )
             startGeneration(request: request, user: userMessage, assistant: assistant, profile: profile,
-                            pageID: pageID, target: target?.artboardID, element: elementTarget,
+                            pageID: pageID, target: target?.artboardID, element: request.elementEdit ? elementTarget : nil,
                             fromAskBar: useSelection)
         }
     }
 
     private func startGeneration(request: LLMRequest, user: ChatMessage, assistant: ChatMessage,
                                  profile: ProviderProfile, pageID: UUID?, target: UUID?,
-                                 element: CanvasSelection? = nil, fromAskBar: Bool = false) {
+                                 element: (selection: CanvasSelection, source: String)? = nil, fromAskBar: Bool = false) {
         let resolved = Set(user.comments.map(\.id))
         app.updateProject(projectID) { p in
             p.messages.append(user)
@@ -1079,6 +1089,8 @@ final class ProjectSession {
         streamingArtboardIDs = []
         viewportAdjustedDuringGeneration = false
         lastLiveUpdate = .distantPast
+        streamingArtifactStarted = false
+        lastUsage = nil
         generationPageID = pageID ?? document.pages.first?.id
         generationTarget = target
         generationElement = element
@@ -1090,7 +1102,7 @@ final class ProjectSession {
         do {
             llm = try ProviderFactory.make(profile)
         } catch {
-            finish(messageID: assistant.id, error: error)
+            task = Task { await finish(messageID: assistant.id, error: error) }
             return
         }
 
@@ -1100,9 +1112,9 @@ final class ProjectSession {
                     guard let self else { return }
                     self.handle(event)
                 }
-                self?.finish(messageID: assistant.id, error: nil)
+                await self?.finish(messageID: assistant.id, error: nil)
             } catch {
-                self?.finish(messageID: assistant.id, error: error is CancellationError ? nil : error)
+                await self?.finish(messageID: assistant.id, error: error is CancellationError ? nil : error)
             }
         }
     }
@@ -1117,9 +1129,11 @@ final class ProjectSession {
         switch event {
         case .text(let delta):
             streamingText += delta
-            if HTMLExtractor.fenceStarted(streamingText) {
-                status = generationElement != nil && ArtboardParser.parse(streamingText).isEmpty
-                    ? "正在修改元素…" : "正在绘制画板…"
+            if !streamingArtifactStarted {
+                streamingArtifactStarted = HTMLExtractor.fenceStarted(streamingText)
+            }
+            if streamingArtifactStarted {
+                status = generationElement == nil ? "正在绘制画板…" : "正在修改元素…"
                 let now = Date()
                 if now.timeIntervalSince(lastLiveUpdate) > 1.2 {
                     lastLiveUpdate = now
@@ -1130,7 +1144,7 @@ final class ProjectSession {
             }
         case .thinking(let delta):
             streamingThinking += delta
-            if !HTMLExtractor.fenceStarted(streamingText) { status = "思考中…" }
+            if !streamingArtifactStarted { status = "思考中…" }
         case .status(let s):
             status = s
         case .usage(let input, let output):
@@ -1139,11 +1153,13 @@ final class ProjectSession {
     }
 
     private func updateLivePreview() {
+        guard generationElement == nil else { return }
         let parsed = ArtboardParser.previewable(streamingText)
         guard !parsed.isEmpty else { return }
         var live = liveDocument ?? document
         let before = live.page(generationPageID)?.artboards.count ?? 0
         let changed = live.merge(parsed, into: generationPageID, kind: kind, fallbackTarget: generationTarget)
+        guard !changed.isEmpty else { return }
         liveDocument = live
         streamingArtboardIDs.formUnion(changed)
         if let sel = selection, streamingArtboardIDs.contains(sel.artboardID), sel.elementID != nil {
@@ -1155,29 +1171,38 @@ final class ProjectSession {
         }
     }
 
-    private func finish(messageID: UUID, error: Error?) {
+    private func finish(messageID: UUID, error generationError: Error?) async {
         let text = streamingText
         let thinking = streamingThinking.trimmed
         let cancelled = wasCancelled
 
-        var outputs = ArtboardParser.parse(text).filter(\.complete)
+        var error = generationError
+        let parsed = ArtboardParser.parse(text)
+        var outputs = generationElement == nil ? parsed.filter(\.complete) : []
         var truncated = false
-        if error == nil, !cancelled, let last = ArtboardParser.parse(text).last, !last.complete, last.html.count > 400 {
+        if generationElement == nil, error == nil, !cancelled,
+           let last = parsed.last, !last.complete, last.html.count > 400 {
             outputs.append(last)
             truncated = true
         }
 
-        // 元素级修改：模型只返回了一个元素（没有输出画板）时，生成结束后替换画布上的元素
-        var elementEdit: (target: CanvasSelection, html: String)?
-        if error == nil, !cancelled, outputs.isEmpty, let target = generationElement,
-           let block = ArtboardParser.element(text), block.complete, !block.html.isEmpty {
-            elementEdit = (target, block.html)
+        var elementEdit: (target: CanvasSelection, source: String, content: String, isPatch: Bool)?
+        if error == nil, !cancelled, let target = generationElement {
+            if !parsed.isEmpty {
+                error = LLMError.invalidResponse("模型返回了整张画板。请选中画板重新尝试，或在主对话中发出修改。")
+            } else if let block = ArtboardParser.element(text) {
+                if block.complete, !block.html.isEmpty {
+                    elementEdit = (target.selection, target.source, block.html, block.isPatch)
+                } else {
+                    error = LLMError.invalidResponse("模型返回的元素修改不完整，请重试。")
+                }
+            }
         }
 
         var newVersion: DesignVersion?
         if error == nil, !outputs.isEmpty {
-            // 在实时预览文档上合并：画板 ID 与预览时一致，网页不必重建
-            var merged = liveDocument ?? document
+            // 保留已预览画板的 ID。中途取消时，从原文档合并完整结果，避免提交半张画板。
+            var merged = outputs.count == parsed.count ? (liveDocument ?? document) : document
             merged.merge(outputs, into: generationPageID, kind: kind, fallbackTarget: generationTarget)
             commit { $0 = merged }
             let next = (project?.versions.map(\.number).max() ?? 0) + 1
@@ -1201,6 +1226,10 @@ final class ProjectSession {
             }
         }
 
+        if let elementEdit {
+            await applyElementEdit(elementEdit.content, isPatch: elementEdit.isPatch, to: elementEdit.target,
+                                   source: elementEdit.source, messageID: messageID, reply: text)
+        }
         isGenerating = false
         app.persistence.setGenerating(projectID, false)
         streamingMessageID = nil
@@ -1216,21 +1245,36 @@ final class ProjectSession {
             needsThumbnail = true
             tweakValues = [:]
         }
-        if let elementEdit {
-            Task { await applyElementEdit(elementEdit.html, to: elementEdit.target, messageID: messageID, reply: text) }
-        }
     }
 
-    /// 用模型返回的元素替换画布上的选中元素，并记为一个新版本
-    private func applyElementEdit(_ html: String, to target: CanvasSelection, messageID: UUID, reply: String) async {
-        guard let id = target.elementID, document.artboard(target.artboardID) != nil else { return }
-        let r = await handle(for: target.artboardID).decode(
-            EditResult.self, "return window.__ds.replaceOuter(id, h)", ["id": id, "h": html])
+    /// 把模型返回的补丁或替换 HTML 写入选中元素，并记为一个新版本
+    private func applyElementEdit(_ content: String, isPatch: Bool, to target: CanvasSelection,
+                                  source: String, messageID: UUID, reply: String) async {
+        let handle = handle(for: target.artboardID)
+        let r: EditResult?
+        if let id = target.elementID, document.artboard(target.artboardID)?.html == source,
+           handle.loadedSource == source {
+            if isPatch {
+                if let patch = ElementPatch.parse(content) {
+                    let text: Any = patch.text.map { $0 as Any } ?? NSNull()
+                    let style: Any = patch.style.map { $0 as Any } ?? NSNull()
+                    r = await handle.decode(EditResult.self, "return window.__ds.patchElement(id, t, s)",
+                                            ["id": id, "t": text, "s": style])
+                } else {
+                    r = nil
+                }
+            } else {
+                r = await handle.decode(EditResult.self, "return window.__ds.replaceOuter(id, h)",
+                                        ["id": id, "h": content])
+            }
+        } else {
+            r = nil
+        }
         // 替换成功时脚本会返回新的图层树；失败（元素已不存在 / HTML 无法解析）时没有
         guard let r, r.tree != nil, r.source != nil else {
             app.updateProject(projectID) { p in
                 guard let i = p.messages.firstIndex(where: { $0.id == messageID }) else { return }
-                p.messages[i].errorText = "没能把修改应用到选中元素：元素可能已被删除，或返回的 HTML 无法解析。"
+                p.messages[i].errorText = "没能把修改应用到选中元素：画板可能已更改，或返回的修改无法解析。"
             }
             return
         }

@@ -413,7 +413,7 @@ struct AttachmentStrip: View {
             HStack(spacing: 8) {
                 ForEach(attachments) { a in
                     ZStack(alignment: .topTrailing) {
-                        thumb(a)
+                        AttachmentThumbnail(attachment: a, size: 56, removable: true)
                         Button {
                             attachments.removeAll { $0.id == a.id }
                         } label: {
@@ -423,21 +423,37 @@ struct AttachmentStrip: View {
                         }
                         .buttonStyle(.plain)
                         .padding(3)
+                        .accessibilityLabel("移除 \(a.filename)")
                     }
                 }
             }
         }
     }
+}
 
-    @ViewBuilder private func thumb(_ a: ChatAttachment) -> some View {
-        if let img = NSImage(data: a.data) {
+private struct AttachmentThumbnail: View {
+    let attachment: ChatAttachment
+    let size: CGFloat
+    var removable = false
+
+    var body: some View {
+        if attachment.isImage, let img = NSImage(data: attachment.data) {
             Image(nsImage: img)
                 .resizable()
                 .scaledToFill()
-                .frame(width: 56, height: 56)
+                .frame(width: size, height: size)
                 .clipShape(.rect(cornerRadius: 10))
+                .accessibilityLabel(attachment.filename)
         } else {
-            RoundedRectangle(cornerRadius: 10).fill(.quaternary).frame(width: 56, height: 56)
+            Label(attachment.filename, systemImage: "doc.text")
+                .font(.caption)
+                .lineLimit(1)
+                .padding(.leading, 9)
+                .padding(.trailing, removable ? 22 : 9)
+                .padding(.vertical, 10)
+                .frame(maxWidth: 154, alignment: .leading)
+                .background(.quaternary, in: .rect(cornerRadius: 10))
+                .help(attachment.filename)
         }
     }
 }
@@ -448,13 +464,7 @@ struct AttachmentThumbs: View {
     var body: some View {
         HStack(spacing: 6) {
             ForEach(attachments) { a in
-                if let img = NSImage(data: a.data) {
-                    Image(nsImage: img)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: 72, height: 72)
-                        .clipShape(.rect(cornerRadius: 10))
-                }
+                AttachmentThumbnail(attachment: a, size: 72)
             }
         }
     }
@@ -464,13 +474,14 @@ struct AttachButton: View {
     var onPick: ([ChatAttachment]) -> Void
     var body: some View {
         Button {
-            let picked = ImageUtil.pickImages()
+            let picked = AttachmentImporter.pick()
             if !picked.isEmpty { onPick(picked) }
         } label: {
             Image(systemName: "paperclip")
         }
         .buttonStyle(ComposerIconButtonStyle())
-        .help("添加参考图片")
+        .help("添加参考图片或文档")
+        .accessibilityLabel("添加参考附件")
     }
 }
 

@@ -643,7 +643,7 @@ struct ChatComposer: View {
         .composerCard(focused: focused)
         .padding(12)
         .dropDestination(for: URL.self) { urls, _ in
-            let picked = urls.compactMap(ImageUtil.attachment(from:))
+            let picked = AttachmentImporter.load(urls)
             session.draftAttachments += picked
             return !picked.isEmpty
         }

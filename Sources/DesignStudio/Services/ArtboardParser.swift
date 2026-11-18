@@ -60,15 +60,17 @@ nonisolated enum ArtboardParser {
     }
 
     /// 取回复中的第一个 ```html element 代码块（元素级修改的结果）
-    static func element(_ text: String) -> (html: String, complete: Bool)? {
+    static func element(_ text: String) -> (html: String, complete: Bool, isPatch: Bool)? {
         var cursor = text.startIndex
         while let open = text.range(of: "```html", options: .caseInsensitive, range: cursor..<text.endIndex) {
             guard let lineEnd = text[open.upperBound...].firstIndex(of: "\n") else { return nil }
             let bodyStart = text.index(after: lineEnd)
             let close = text.range(of: "\n```", range: bodyStart..<text.endIndex)
-            if isElementInfo(String(text[open.upperBound..<lineEnd])) {
-                guard let close else { return (String(text[bodyStart...]), false) }
-                return (String(text[bodyStart..<close.lowerBound]).trimmed, true)
+            let info = String(text[open.upperBound..<lineEnd])
+            if isElementInfo(info) {
+                let isPatch = info.split(whereSeparator: \.isWhitespace).map { $0.lowercased() } == ["element", "patch"]
+                guard let close else { return (String(text[bodyStart...]), false, isPatch) }
+                return (String(text[bodyStart..<close.lowerBound]).trimmed, true, isPatch)
             }
             guard let close else { return nil }
             cursor = close.upperBound
@@ -98,6 +100,17 @@ nonisolated enum ArtboardParser {
     /// 只保留有实际内容的部分代码块（实时预览时过滤掉刚开头的块）
     static func previewable(_ text: String, minLength: Int = 300) -> [ParsedArtboard] {
         parse(text).filter { $0.complete || $0.html.count >= minLength }
+    }
+}
+
+nonisolated struct ElementPatch: Decodable {
+    var text: String?
+    var style: [String: String]?
+
+    static func parse(_ json: String) -> Self? {
+        guard let patch = try? JSONDecoder().decode(Self.self, from: Data(json.utf8)),
+              patch.text != nil || patch.style?.isEmpty == false else { return nil }
+        return patch
     }
 }
 

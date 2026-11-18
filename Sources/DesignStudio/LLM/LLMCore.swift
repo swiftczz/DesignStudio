@@ -13,8 +13,15 @@ nonisolated struct LLMRequest: Sendable {
     var messages: [LLMMessage]
     /// 最大输出 tokens；nil 表示不传，由服务商按模型上限处理（Anthropic Messages 必填，届时用兜底值）
     var maxTokens: Int?
-    /// 元素级修改：模型只应返回一个 ```html element 代码块（CLI 提供方据此调整末尾提醒）
+    /// 元素级修改：模型返回元素修改代码块（CLI 提供方据此调整末尾提醒）
     var elementEdit = false
+
+    var replyFormatReminder: String {
+        if elementEdit {
+            return "Output one block: ```html element patch for text/style JSON, or ```html element for replacement HTML."
+        }
+        return "Output one ```html artboard=\"<name>\" width=<px> height=<px> block per artboard."
+    }
 
     var latestImages: [ChatAttachment] { messages.last?.images ?? [] }
 
@@ -59,6 +66,7 @@ nonisolated enum LLMError: LocalizedError {
     case cli(String)
     case notInstalled(String)
     case notLoggedIn(String)
+    case invalidResponse(String)
     case emptyResponse
 
     var errorDescription: String? {
@@ -70,6 +78,7 @@ nonisolated enum LLMError: LocalizedError {
         case .cli(let msg): "命令行工具出错：\(msg)"
         case .notInstalled(let name): "没有找到 `\(name)` 命令行工具，请先安装，或在设置里指定可执行文件路径。"
         case .notLoggedIn(let name): "\(name) 尚未登录，请在 设置 → 模型与账号 中登录。"
+        case .invalidResponse(let message): message
         case .emptyResponse: "模型没有返回内容。"
         }
     }

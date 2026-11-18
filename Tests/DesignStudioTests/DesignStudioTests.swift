@@ -239,15 +239,17 @@ struct PromptTests {
         #expect(!req.system.contains("single ```html"))
     }
 
-    @Test func elementEditOnlySendsTargetArtboardAndElement() {
+    @Test func elementEditOmitsBothArtboardBodiesAndKeepsStyles() {
         let profile = ProviderProfile(name: "X", kind: .codex)
         var project = Project(name: "t", kind: .prototype)
         project.document = DesignDocument(pages: [DesignPage(name: "页面 1", artboards: [
-            Artboard(name: "首页", html: "<html><body><section class=\"hero\">Hi</section></body></html>", width: 390, height: 844),
+            Artboard(name: "首页", html: "<html><body><section class=\"hero\">Hi</section><footer>Unrelated footer</footer></body></html>",
+                     width: 390, height: 844),
             Artboard(name: "设置", html: "<html><body>settings</body></html>", width: 390, height: 844)
         ])])
         let selection = DesignPrompt.SelectionContext(artboardName: "首页", elementDescription: "<section> 元素",
-                                                      elementHTML: "<section class=\"hero\">Hi</section>", elementEdit: true)
+                                                      elementHTML: "<section class=\"hero\">Hi</section>", elementEdit: true,
+                                                      computedStyle: ["background-color": "rgb(255, 255, 255)"])
         let req = DesignPrompt.makeRequest(project: project, designSystem: nil,
                                            newMessage: ChatMessage(role: .user, text: "背景改为黑色"),
                                            profile: profile, selection: selection)
@@ -255,9 +257,31 @@ struct PromptTests {
         #expect(req.elementEdit)
         #expect(last.contains("## 选中的元素"))
         #expect(last.contains("```html element"))
-        #expect(!last.contains("settings"))            // 其他画板不再附上
+        #expect(last.contains("background-color: rgb(255, 255, 255)"))
+        #expect(!last.contains("Unrelated footer"))
+        #expect(!last.contains("settings"))
         #expect(!last.contains("不要把多个界面并排画在同一个画板里"))
         #expect(req.system.contains("## Element edits"))
+    }
+
+    @Test func artboardScopeKeepsNamedReferencesAndUnscopedChatKeepsAllArtboards() {
+        let profile = ProviderProfile(name: "X", kind: .codex)
+        var project = Project(name: "t", kind: .prototype)
+        project.document = DesignDocument(pages: [DesignPage(name: "当前页面", artboards: [
+            Artboard(name: "首页", html: "<main>home body</main>", width: 390, height: 844),
+            Artboard(name: "设置", html: "<main>settings body</main>", width: 390, height: 844),
+            Artboard(name: "收藏", html: "<main>favorites body</main>", width: 390, height: 844)
+        ])])
+        let selection = DesignPrompt.SelectionContext(artboardName: "首页", elementHTML: "<button>打开</button>", elementEdit: true)
+        let message = ChatMessage(role: .user, text: "参考设置的配色")
+        let scoped = DesignPrompt.makeRequest(project: project, designSystem: nil, newMessage: message,
+                                              profile: profile, selection: selection)
+        #expect(!scoped.elementEdit)
+        #expect(scoped.messages.last?.text.contains("home body") == true)
+        #expect(scoped.messages.last?.text.contains("settings body") == true)
+        #expect(scoped.messages.last?.text.contains("favorites body") == false)
+        let all = DesignPrompt.makeRequest(project: project, designSystem: nil, newMessage: message, profile: profile)
+        #expect(all.messages.last?.text.contains("favorites body") == true)
     }
 }
 
@@ -335,6 +359,18 @@ struct ElementEditParsingTests {
     @Test func partialElementBlockIsIncomplete() {
         let block = ArtboardParser.element("好的\n```html element\n<div>")
         #expect(block?.complete == false)
+    }
+
+    @Test func parsesPatchWithoutTreatingJSONAsArtboardOrChat() throws {
+        let reply = "已更新按钮。\n```html element patch\n{\"text\":\"\",\"style\":{\"color\":\"#f00\"}}\n```"
+        let block = try #require(ArtboardParser.element(reply))
+        #expect(block.complete && block.isPatch)
+        let patch = try #require(ElementPatch.parse(block.html))
+        #expect(patch.text == "")
+        #expect(patch.style == ["color": "#f00"])
+        #expect(ArtboardParser.parse(reply).isEmpty)
+        #expect(HTMLExtractor.conversationalText(reply) == "已更新按钮。")
+        #expect(ElementPatch.parse("{}") == nil)
     }
 
     @Test func artboardsStillParsedAlongsideElementInfo() {

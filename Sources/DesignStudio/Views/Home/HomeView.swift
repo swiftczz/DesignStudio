@@ -37,7 +37,7 @@ struct HomeView: View {
             promptFocused = true
         }
         .dropDestination(for: URL.self) { urls, _ in
-            let picked = urls.compactMap(ImageUtil.attachment(from:))
+            let picked = AttachmentImporter.load(urls)
             attachments += picked
             return !picked.isEmpty
         }
@@ -107,8 +107,14 @@ struct HomeView: View {
     private func start() {
         let text = prompt.trimmed
         guard !text.isEmpty || !attachments.isEmpty else { return }
-        app.createProject(prompt: text, kind: kind, designSystemID: designSystemID,
-                          model: modelChoice, attachments: attachments)
+        do {
+            let files = try AttachmentImporter.includingPastedDocuments(in: text, attachments: attachments)
+            app.createProject(prompt: text, kind: kind, designSystemID: designSystemID,
+                              model: modelChoice, attachments: files)
+        } catch {
+            ExportService.presentError("无法读取参考文件", error)
+            return
+        }
         prompt = ""
         attachments = []
     }
