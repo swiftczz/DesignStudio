@@ -13,10 +13,12 @@ nonisolated struct AntigravityProvider: LLMProvider {
             let task = Task {
                 do {
                     let workdir = try TempWorkspace.make(prefix: "antigravity")
+                    defer { try? FileManager.default.removeItem(at: workdir) }
                     let images = try TempWorkspace.writeImages(request.latestImages, to: workdir)
 
                     // agy 没有替换系统提示词的参数，设计规范放在提示词开头
                     var prompt = request.flattenedPrompt(includeSystem: true)
+                    prompt += try TempWorkspace.prepareReferenceFiles(request.files, in: workdir)
                     if !images.isEmpty {
                         let names = images.map { "./" + $0.lastPathComponent }.joined(separator: "、")
                         prompt += "\n\n用户附带了参考图片，已保存在当前目录：\(names)。请先用 view_file 查看这些图片再开始设计。"
@@ -97,7 +99,6 @@ nonisolated struct AntigravityProvider: LLMProvider {
                             }
                         }
                     }
-                    try? FileManager.default.removeItem(at: workdir)
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)

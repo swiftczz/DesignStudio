@@ -168,6 +168,11 @@ nonisolated enum DesignPrompt {
         current += artboards.isEmpty ? "## 设计需求\n" : "## 本轮修改要求\n"
         current += newMessage.text
         current += referenceDocuments(newMessage.attachments)
+        let files = newMessage.attachments.filter { !$0.isImage && $0.documentText == nil }
+        if !profile.kind.isCLI, !files.isEmpty, let names = try? JSONEncoder().encode(files.map(\.filename)) {
+            current += "\n\nThe following attached files are saved in the project. Only their names are available in this request: "
+                + String(decoding: names, as: UTF8.self)
+        }
         // 放在消息末尾的格式提醒：对指令遵循较弱、或被其他末尾指令干扰的模型更稳
         if elementEdit {
             current += "\n\n（输出格式提醒：只输出一个元素修改代码块。文字或样式用 ```html element patch，"
@@ -211,7 +216,8 @@ nonisolated enum DesignPrompt {
             messages: normalize(history + [latest]),
             // 输出用模型上限；未知时不传，由服务商按模型最大值处理
             maxTokens: limits.maxOutput,
-            elementEdit: elementEdit
+            elementEdit: elementEdit,
+            files: profile.kind.isCLI ? files : []
         )
     }
 

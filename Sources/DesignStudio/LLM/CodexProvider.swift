@@ -15,9 +15,16 @@ nonisolated struct CodexProvider: LLMProvider {
                     let images = try TempWorkspace.writeImages(request.latestImages, to: workdir)
 
                     var prompt = request.flattenedPrompt(includeSystem: true)
+                    prompt += try TempWorkspace.prepareReferenceFiles(request.files, in: workdir)
                     // 注意：不要在这里另立输出格式，必须与 instructions 里的画板协议一致（每个画板一个代码块）
-                    prompt += "\n\nIMPORTANT: Do not run shell commands and do not create or edit files. "
-                        + "Reply directly in this message, following the output contract in <instructions>: "
+                    prompt += "\n\nIMPORTANT: "
+                    if request.files.isEmpty {
+                        prompt += "Do not run shell commands. "
+                    } else {
+                        prompt += "Use read-only operations when inspecting the reference files. "
+                    }
+                    prompt += "Do not create or edit files. Reply directly in this message, "
+                        + "following the output contract in <instructions>: "
                     prompt += request.replyFormatReminder
                     let extra = ArgumentSplitter.split(profile.extraArguments)
                     continuation.yield(.status("正在启动 Codex…"))

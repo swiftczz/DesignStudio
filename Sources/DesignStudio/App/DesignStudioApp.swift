@@ -46,9 +46,23 @@ enum SettingsWindow {
     static let id = "settings"
 }
 
+extension FocusedValues {
+    @Entry var composerAttachments: Binding<[ChatAttachment]>?
+}
+
 struct AppCommands: Commands {
     let app: AppModel
     @Environment(\.openWindow) private var openWindow
+    @FocusedBinding(\.composerAttachments) private var composerAttachments
+
+    private func paste() {
+        if let current = composerAttachments,
+           let pasted = AttachmentImporter.pastedAttachments(from: .general) {
+            composerAttachments = current + pasted
+        } else {
+            app.performPasteboard(.paste)
+        }
+    }
 
     var body: some Commands {
         CommandGroup(after: .appInfo) {
@@ -76,7 +90,7 @@ struct AppCommands: Commands {
                 .keyboardShortcut("x")
             Button("拷贝") { app.performPasteboard(.copy) }
                 .keyboardShortcut("c")
-            Button("粘贴") { app.performPasteboard(.paste) }
+            Button("粘贴", action: paste)
                 .keyboardShortcut("v")
             Button("全选") { app.performPasteboard(.selectAll) }
                 .keyboardShortcut("a")

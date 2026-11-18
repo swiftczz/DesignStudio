@@ -297,12 +297,14 @@ private struct AttachmentThumbnail: View {
         if attachment.isImage, let img = NSImage(data: attachment.data) {
             Image(nsImage: img)
                 .resizable()
-                .scaledToFill()
+                .scaledToFit()
                 .frame(width: size, height: size)
+                .background(.quaternary)
                 .clipShape(.rect(cornerRadius: 10))
                 .accessibilityLabel(attachment.filename)
+                .help(attachment.filename)
         } else {
-            Label(attachment.filename, systemImage: "doc.text")
+            Label(attachment.filename, systemImage: attachment.documentText == nil ? "doc" : "doc.text")
                 .font(.caption)
                 .lineLimit(1)
                 .padding(.leading, 9)
@@ -337,7 +339,7 @@ struct AttachButton: View {
             Image(systemName: "paperclip")
         }
         .buttonStyle(ComposerIconButtonStyle())
-        .help("添加参考图片或文档")
+        .help("添加附件，也可在输入框按 ⌘V 粘贴文件或图片")
         .accessibilityLabel("添加参考附件")
     }
 }

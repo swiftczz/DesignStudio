@@ -222,6 +222,25 @@ nonisolated enum TempWorkspace {
         return dir
     }
 
+    private struct ReferenceFile: Encodable {
+        let filename: String
+        let path: String
+    }
+
+    static func prepareReferenceFiles(_ files: [ChatAttachment], in dir: URL) throws -> String {
+        guard !files.isEmpty else { return "" }
+        let references = try files.enumerated().map { index, file in
+            let extensionText = (file.filename as NSString).pathExtension
+            let safeExtension = extensionText.prefix(24).filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+            let name = "attachment-\(index + 1)" + (safeExtension.isEmpty ? "" : ".\(safeExtension)")
+            try file.data.write(to: dir.appending(path: name))
+            return ReferenceFile(filename: file.filename, path: "./" + name)
+        }
+        let json = try JSONEncoder().encode(references)
+        return "\n\nReference files in the current working directory (read them as source material when relevant):\n"
+            + "<reference_files>\n\(String(decoding: json, as: UTF8.self))\n</reference_files>"
+    }
+
     static func writeImages(_ images: [ChatAttachment], to dir: URL) throws -> [URL] {
         try images.enumerated().map { index, img in
             let url = dir.appending(path: "reference-\(index + 1).\(img.fileExtension)")

@@ -582,6 +582,7 @@ struct ChatComposer: View {
                 .font(.system(size: 14))
                 .lineLimit(1...8)
                 .focused($focused)
+                .focusedValue(\.composerAttachments, $session.draftAttachments)
                 .onSubmit { session.send() }
                 .padding(.horizontal, 4)
                 .padding(.top, 2)

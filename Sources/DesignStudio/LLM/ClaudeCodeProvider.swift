@@ -12,9 +12,11 @@ nonisolated struct ClaudeCodeProvider: LLMProvider {
             let task = Task {
                 do {
                     let workdir = try TempWorkspace.make(prefix: "claude")
+                    defer { try? FileManager.default.removeItem(at: workdir) }
                     let images = try TempWorkspace.writeImages(request.latestImages, to: workdir)
 
                     var prompt = request.flattenedPrompt(includeSystem: false)
+                    prompt += try TempWorkspace.prepareReferenceFiles(request.files, in: workdir)
                     if !images.isEmpty {
                         let names = images.map { "./" + $0.lastPathComponent }.joined(separator: "、")
                         prompt += "\n\n用户附带了参考图片，已保存在当前目录：\(names)。请先用 Read 工具查看这些图片再开始设计。"
@@ -130,7 +132,6 @@ nonisolated struct ClaudeCodeProvider: LLMProvider {
                             }
                         }
                     }
-                    try? FileManager.default.removeItem(at: workdir)
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)

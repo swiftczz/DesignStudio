@@ -15,6 +15,7 @@ nonisolated struct LLMRequest: Sendable {
     var maxTokens: Int?
     /// 元素级修改：模型返回元素修改代码块（CLI 提供方据此调整末尾提醒）
     var elementEdit = false
+    var files: [ChatAttachment] = []
 
     var replyFormatReminder: String {
         if elementEdit {

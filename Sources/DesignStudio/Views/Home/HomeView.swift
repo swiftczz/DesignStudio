@@ -67,6 +67,7 @@ struct HomeView: View {
                 .font(.system(size: 16))
                 .lineLimit(3...10)
                 .focused($promptFocused)
+                .focusedValue(\.composerAttachments, $attachments)
                 .onSubmit(start)
                 .padding(.horizontal, 6)
                 .padding(.top, 4)
