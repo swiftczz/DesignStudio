@@ -312,4 +312,6 @@ nonisolated struct AppSettings: Codable, Sendable {
     var defaultDesignSystemID: UUID?
     /// 主题色（ThemeColor.rawValue），为空时用默认的陶土橙
     var accentTheme: String?
+    var automaticallyChecksForUpdates: Bool?
+    var lastUpdateCheck: Date?
 }

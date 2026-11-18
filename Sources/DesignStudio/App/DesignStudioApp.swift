@@ -38,6 +38,15 @@ struct DesignStudioApp: App {
         .defaultSize(width: 900, height: 640)
         .windowToolbarStyle(.unified)
         .commandsRemoved()
+
+        Window("软件更新", id: UpdateCheckView.windowID) {
+            UpdateCheckView()
+                .environment(app)
+                .tint(Theme.accent)
+        }
+        .windowResizability(.contentSize)
+        .restorationBehavior(.disabled)
+        .commandsRemoved()
     }
 }
 
@@ -50,6 +59,12 @@ struct AppCommands: Commands {
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button(app.isCheckingForUpdates ? "正在检查更新…" : "检查更新…") {
+                UpdateCheckPresentation.start(app: app, openWindow: openWindow)
+            }
+            .disabled(app.isCheckingForUpdates)
+        }
         CommandGroup(replacing: .appSettings) {
             Button("设置…") { openWindow(id: SettingsWindow.id) }
                 .keyboardShortcut(",")

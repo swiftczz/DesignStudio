@@ -3,6 +3,7 @@ import AppKit
 
 struct RootView: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         @Bindable var app = app
@@ -14,6 +15,11 @@ struct RootView: View {
             detail
         }
         .tint(Theme.accent)
+        .task {
+            if case .available = await app.checkForUpdates(automatically: true) {
+                openWindow(id: UpdateCheckView.windowID)
+            }
+        }
     }
 
     /// 正在全屏查看画板的项目

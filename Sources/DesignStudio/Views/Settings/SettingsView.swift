@@ -681,6 +681,7 @@ private struct ThemeSwatches: View {
 
 struct GeneralSettingsView: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Form {
@@ -718,8 +719,19 @@ struct GeneralSettingsView: View {
                 }
             }
 
+            Section("软件更新") {
+                Toggle("启动时自动检查更新", isOn: Binding(
+                    get: { app.settings.automaticallyChecksForUpdates == true },
+                    set: { app.settings.automaticallyChecksForUpdates = $0; app.saveSettings() }
+                ))
+                Button(app.isCheckingForUpdates ? "正在检查更新…" : "检查更新…") {
+                    UpdateCheckPresentation.start(app: app, openWindow: openWindow)
+                }
+                .disabled(app.isCheckingForUpdates)
+            }
+
             Section("关于") {
-                LabeledContent("版本", value: "1.0.0")
+                LabeledContent("版本", value: UpdateService.installedVersion ?? "开发版本")
                 Text("DesignStudio 是一个开源的 AI 设计画布：用对话生成可交互的 HTML 设计稿，支持 Claude / Codex 账号登录与第三方 API。")
                     .foregroundStyle(.secondary)
             }

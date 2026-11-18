@@ -9,6 +9,12 @@ enum SidebarRoute: Hashable {
     case project(UUID)
 }
 
+enum UpdateCheckResult {
+    case upToDate
+    case available
+    case failed(String)
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -19,6 +25,8 @@ final class AppModel {
     var designSystems: [DesignSystem] = []
     var providers: [ProviderProfile] = []
     var settings = AppSettings()
+    private(set) var isCheckingForUpdates = false
+    private(set) var availableUpdate: UpdateService.Update?
     var route: SidebarRoute = .home {
         didSet {
             // 从主页 / 设计系统进入项目时收起项目边栏，只留对话栏和画布；离开项目回到这些页面时再展开。
@@ -253,6 +261,35 @@ final class AppModel {
 
     func saveProviders() { persistence.store(providers, file: "providers.json") }
     func saveSettings() { persistence.store(settings, file: "settings.json") }
+
+    func checkForUpdates(automatically: Bool = false) async -> UpdateCheckResult? {
+        guard !isCheckingForUpdates else { return nil }
+
+        let now = Date.now
+        if automatically {
+            guard settings.automaticallyChecksForUpdates == true else { return nil }
+            if let lastCheck = settings.lastUpdateCheck, now.timeIntervalSince(lastCheck) < 24 * 60 * 60 { return nil }
+        }
+
+        guard let version = UpdateService.installedVersion else {
+            return automatically ? nil : .failed(UpdateService.CheckError.unknownInstalledVersion.localizedDescription)
+        }
+
+        isCheckingForUpdates = true
+        defer { isCheckingForUpdates = false }
+        settings.lastUpdateCheck = now
+        saveSettings()
+        do {
+            let update = try await UpdateService.check(installedVersion: version)
+            guard !Task.isCancelled else { return nil }
+            guard let update else { return automatically ? nil : .upToDate }
+            guard !automatically || settings.automaticallyChecksForUpdates == true else { return nil }
+            availableUpdate = update
+            return .available
+        } catch {
+            return automatically || Task.isCancelled ? nil : .failed(error.localizedDescription)
+        }
+    }
 
     func setAccentTheme(_ theme: ThemeColor) {
         ThemeStore.shared.choice = theme
