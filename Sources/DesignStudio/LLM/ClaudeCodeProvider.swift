@@ -64,7 +64,7 @@ nonisolated struct ClaudeCodeProvider: LLMProvider {
                                     if profile.model.trimmed.isEmpty, !model.isEmpty {
                                         ModelCatalog.recordReportedModel(model, kind: .claudeCode)
                                     }
-                                    continuation.yield(.status(model.isEmpty ? "Claude 已连接" : "Claude 已连接 · \(model)"))
+                                    continuation.yield(.status("Claude 已连接"))
                                 }
                             case "stream_event":
                                 guard let event = obj["event"] as? [String: Any] else { break }

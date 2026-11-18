@@ -39,7 +39,6 @@ nonisolated struct ScrollMetrics: Equatable, Sendable {
 }
 
 struct ChatPanel: View {
-    @Environment(AppModel.self) private var app
     @Bindable var session: ProjectSession
     /// 是否自动跟随到底部：用户往上翻后停止，回到底部后恢复
     @State private var followBottom = true
@@ -47,17 +46,6 @@ struct ChatPanel: View {
     @State private var titleInset: CGFloat = 0
 
     private var messages: [ChatMessage] { session.project?.messages ?? [] }
-
-    /// 需要显示模型名的回复：第一条回复，以及模型与上一条回复不同时（其余回复悬停可查看）
-    static func providerHeaders(_ messages: [ChatMessage]) -> Set<UUID> {
-        var result = Set<UUID>()
-        var last: String?
-        for m in messages where m.role == .assistant {
-            if result.isEmpty && last == nil || m.providerName != last { result.insert(m.id) }
-            last = m.providerName
-        }
-        return result
-    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -69,11 +57,9 @@ struct ChatPanel: View {
                                                    description: Text("描述你想要的设计，或者对当前画布提出修改。"))
                                 .padding(.top, 60)
                         }
-                        let headers = Self.providerHeaders(messages)
                         let lastReply = messages.last(where: { $0.role == .assistant })?.id
                         ForEach(messages) { m in
-                            MessageView(message: m, session: session, showsProvider: headers.contains(m.id),
-                                        isLastReply: m.id == lastReply)
+                            MessageView(message: m, session: session, isLastReply: m.id == lastReply)
                                 .id(m.id)
                                 // 新消息从下方轻轻浮入
                                 .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 12)),
@@ -179,8 +165,6 @@ struct MessageView: View {
     @Environment(AppModel.self) private var app
     let message: ChatMessage
     @Bindable var session: ProjectSession
-    /// 是否在回复顶部显示模型名（与上一条回复的模型相同时省略）
-    var showsProvider = true
     /// 最后一条回复：操作栏常驻显示，且可以重新生成
     var isLastReply = false
     @State private var hovering = false
@@ -238,15 +222,6 @@ struct MessageView: View {
         let thinking = isStreaming ? session.streamingThinking : (message.thinking ?? "")
 
         VStack(alignment: .leading, spacing: 10) {
-            if showsProvider {
-                HStack(spacing: 6) {
-                    ProviderLogo(brand: brand, size: 14)
-                    Text(message.providerName ?? "助手")
-                        .font(.caption)
-                }
-                .foregroundStyle(.secondary)
-            }
-
             let thinkingNow = isStreaming && raw.isEmpty && !thinking.trimmed.isEmpty
             if !thinking.trimmed.isEmpty {
                 ThinkingSection(text: thinking, isThinking: thinkingNow)
@@ -280,7 +255,7 @@ struct MessageView: View {
                     .transition(.opacity)
             }
 
-            if !isStreaming {
+            if !isStreaming || message.providerName != nil {
                 actionBar(display: display)
             }
         }
@@ -291,38 +266,45 @@ struct MessageView: View {
         .animation(.snappy(duration: 0.25), value: message.versionID)
     }
 
-    /// 回复下方的操作栏：复制、重新生成；顶部省略了模型名时在这里显示。
-    /// 最后一条回复常驻，其余悬停时出现（始终占位，出现时不会让内容跳动）
+    /// 模型名仅随悬停显示。最后一条回复的操作按钮常驻。
     private func actionBar(display: String) -> some View {
-        let visible = hovering || isLastReply
+        let showsActions = hovering || isLastReply
         return HStack(spacing: 2) {
-            if !display.isEmpty {
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(display, forType: .string)
-                    withAnimation(.snappy(duration: 0.2)) { copied = true }
-                    Task {
-                        try? await Task.sleep(for: .seconds(1.5))
-                        withAnimation(.snappy(duration: 0.2)) { copied = false }
+            if !isStreaming {
+                HStack(spacing: 2) {
+                    if !display.isEmpty {
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(display, forType: .string)
+                            withAnimation(.snappy(duration: 0.2)) { copied = true }
+                            Task {
+                                try? await Task.sleep(for: .seconds(1.5))
+                                withAnimation(.snappy(duration: 0.2)) { copied = false }
+                            }
+                        } label: {
+                            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                                .contentTransition(.symbolEffect(.replace))
+                        }
+                        .buttonStyle(MessageActionButtonStyle())
+                        .help(copied ? "已复制" : "复制回复")
                     }
-                } label: {
-                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .contentTransition(.symbolEffect(.replace))
+                    if isLastReply && message.errorText == nil {
+                        Button {
+                            session.retry(assistantMessageID: message.id)
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(MessageActionButtonStyle())
+                        .disabled(session.isGenerating)
+                        .help("重新生成这条回复")
+                    }
                 }
-                .buttonStyle(MessageActionButtonStyle())
-                .help(copied ? "已复制" : "复制回复")
+                .opacity(showsActions ? 1 : 0)
+                .allowsHitTesting(showsActions)
+                .accessibilityHidden(!showsActions)
+                .animation(.easeOut(duration: 0.15), value: showsActions)
             }
-            if isLastReply && message.errorText == nil {
-                Button {
-                    session.retry(assistantMessageID: message.id)
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(MessageActionButtonStyle())
-                .disabled(session.isGenerating)
-                .help("重新生成这条回复")
-            }
-            if !showsProvider, let name = message.providerName {
+            if let name = message.providerName {
                 HStack(spacing: 5) {
                     ProviderLogo(brand: brand, size: 12)
                     Text(name)
@@ -330,11 +312,12 @@ struct MessageView: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .padding(.leading, 6)
+                .opacity(hovering ? 1 : 0)
+                .accessibilityHidden(!hovering)
+                .animation(.easeOut(duration: 0.15), value: hovering)
             }
         }
         .padding(.leading, -5)
-        .opacity(visible ? 1 : 0)
-        .animation(.easeOut(duration: 0.15), value: visible)
     }
 }
 

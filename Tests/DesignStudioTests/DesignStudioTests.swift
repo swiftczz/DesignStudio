@@ -318,17 +318,6 @@ struct ShapeTests {
     }
 }
 
-@Suite("对话显示")
-struct ChatDisplayTests {
-    @MainActor @Test func providerShownOnlyWhenModelChanges() {
-        func ai(_ p: String) -> ChatMessage { ChatMessage(role: .assistant, text: "x", providerName: p) }
-        let u = ChatMessage(role: .user, text: "hi")
-        let a1 = ai("DeepSeek · Flash"), a2 = ai("DeepSeek · Flash"), a3 = ai("Claude · Opus"), a4 = ai("Claude · Opus"), a5 = ai("DeepSeek · Flash")
-        let shown = ChatPanel.providerHeaders([u, a1, u, a2, u, a3, u, a4, u, a5])
-        #expect(shown == [a1.id, a3.id, a5.id])
-    }
-}
-
 @Suite("元素级修改")
 struct ElementEditParsingTests {
     @Test func targetDecodesFromOldMessagesAndAppearsInHistory() throws {
