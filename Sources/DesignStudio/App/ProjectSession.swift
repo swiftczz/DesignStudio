@@ -778,10 +778,10 @@ final class ProjectSession {
         commit { $0.updateArtboard(id, mutate) }
     }
 
-    func moveArtboard(_ id: UUID, by delta: CGSize) {
+    func moveArtboard(_ id: UUID, to origin: CGPoint) {
         updateArtboard(id) { a in
-            a.x = (a.x + delta.width).rounded()
-            a.y = (a.y + delta.height).rounded()
+            a.x = origin.x
+            a.y = origin.y
         }
     }
 

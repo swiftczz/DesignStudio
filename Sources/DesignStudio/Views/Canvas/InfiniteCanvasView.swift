@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Observation
 
 /// 无限画布：所有画板摊开在画布上，可平移、缩放，直接选中和编辑元素
 struct InfiniteCanvasView: View {
@@ -10,6 +11,7 @@ struct InfiniteCanvasView: View {
 
     /// 浮动工具栏距画布上下边缘的距离（顶部控制条与底部工具栏对称）
     static let edgeInset: CGFloat = 18
+    @State private var artboardDrag = ArtboardDragPreview()
     @State private var textBarSize = CGSize(width: 460, height: 38)
 
     /// 格式工具栏的位置：选中元素上方居中；上方放不下（被顶部控制条挡住）时放到下方尺寸标签之下，左右不超出画布
@@ -40,16 +42,23 @@ struct InfiniteCanvasView: View {
                     }
 
                 ForEach(session.currentPage?.artboards ?? []) { board in
-                    ArtboardFrame(artboard: board, session: session)
+                    ArtboardFrame(artboard: board, session: session, drag: artboardDrag)
+                        .zIndex(Double(artboardDrag.isMoving(board.id) ? 1 : 0))
                 }
 
                 if !session.interactivePreview {
-                    SelectionLayer(session: session)
+                    SelectionLayer(session: session, drag: artboardDrag)
                         .allowsHitTesting(false)
+                        .zIndex(2)
                 }
+
+                ArtboardGuideLayer(session: session, drag: artboardDrag)
+                    .allowsHitTesting(false)
+                    .zIndex(3)
 
                 if session.tool.capturesPointer && session.isEditable && !session.interactivePreview {
                     ToolCaptureLayer(session: session)
+                        .zIndex(4)
                 }
 
                 // 选中文字时，元素上方出现格式工具栏
@@ -58,14 +67,17 @@ struct InfiniteCanvasView: View {
                         .onGeometryChange(for: CGSize.self) { $0.size } action: { textBarSize = $0 }
                         .offset(x: placement.origin.x, y: placement.origin.y)
                         .transition(.opacity)
+                        .zIndex(5)
                 }
 
                 if let pending = session.pendingComment {
                     CommentNoteEditor(session: session, artboardID: pending.artboardID, rect: pending.props.rect)
+                        .zIndex(5)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
             .clipped()
+            .coordinateSpace(.named(CanvasCoordinateSpace.viewport))
             .background(CanvasEventMonitor(session: session))
             .onAppear { session.viewportDidChange(geo.size) }
             .onChange(of: geo.size) { _, size in session.viewportDidChange(size) }
@@ -171,12 +183,70 @@ private struct CanvasGrid: View {
     }
 }
 
+private enum CanvasCoordinateSpace: Hashable {
+    case viewport
+}
+
+@Observable
+private final class ArtboardDragPreview {
+    private(set) var artboardID: UUID?
+    private(set) var result: ArtboardAlignment.Result?
+    private var grabOffset = CGSize.zero
+    private var neighbors: [CGRect] = []
+
+    func isMoving(_ id: UUID) -> Bool { artboardID == id }
+
+    func frame(for artboard: Artboard) -> CGRect {
+        isMoving(artboard.id) ? result?.frame ?? artboard.frame : artboard.frame
+    }
+
+    func begin(_ artboard: Artboard, at pointer: CGPoint, neighbors: [CGRect]) {
+        artboardID = artboard.id
+        grabOffset = CGSize(width: pointer.x - artboard.x, height: pointer.y - artboard.y)
+        self.neighbors = neighbors
+    }
+
+    func update(_ artboard: Artboard, at pointer: CGPoint, zoom: CGFloat) {
+        let origin = CGPoint(x: pointer.x - grabOffset.width, y: pointer.y - grabOffset.height)
+        result = ArtboardAlignment.snap(CGRect(origin: origin, size: artboard.frame.size),
+                                        to: neighbors, tolerance: 5 / zoom)
+    }
+
+    func clear(_ id: UUID) {
+        guard artboardID == id else { return }
+        artboardID = nil
+        result = nil
+        neighbors = []
+    }
+}
+
+private struct ArtboardGuideLayer: View {
+    let session: ProjectSession
+    let drag: ArtboardDragPreview
+
+    var body: some View {
+        let guides = drag.result?.guides ?? []
+        Canvas { context, _ in
+            for guide in guides {
+                let start = session.viewPoint(guide.start), end = session.viewPoint(guide.end)
+                let vertical = start.x == end.x
+                let line = Path {
+                    $0.move(to: CGPoint(x: start.x - (vertical ? 0 : 10), y: start.y - (vertical ? 10 : 0)))
+                    $0.addLine(to: CGPoint(x: end.x + (vertical ? 0 : 10), y: end.y + (vertical ? 10 : 0)))
+                }
+                context.stroke(line, with: .color(.pink), lineWidth: 1)
+            }
+        }
+    }
+}
+
 // MARK: - 画板
 
 private struct ArtboardFrame: View {
     let artboard: Artboard
     @Bindable var session: ProjectSession
-    @State private var dragOffset: CGSize = .zero
+    let drag: ArtboardDragPreview
+    @GestureState private var isDragging = false
     @State private var renaming = false
     @State private var newName = ""
 
@@ -184,7 +254,7 @@ private struct ArtboardFrame: View {
 
     var body: some View {
         let z = session.zoom
-        let origin = session.viewPoint(CGPoint(x: artboard.x, y: artboard.y))
+        let origin = session.viewPoint(drag.frame(for: artboard).origin)
         let isSelected = session.selection?.artboardID == artboard.id && session.selection?.elementID == nil
 
         let width = max(artboard.width * z, 120)
@@ -203,8 +273,11 @@ private struct ArtboardFrame: View {
                 .shadow(color: .black.opacity(0.10), radius: 6, y: 2)
         }
         .frame(width: width, height: height, alignment: .topLeading)
-        .position(x: origin.x + dragOffset.width + width / 2,
-                  y: origin.y - headerHeight + dragOffset.height + height / 2)
+        .position(x: origin.x + width / 2, y: origin.y - headerHeight + height / 2)
+        .onChange(of: isDragging) { _, active in
+            if !active { drag.clear(artboard.id) }
+        }
+        .onDisappear { drag.clear(artboard.id) }
     }
 
     @ViewBuilder
@@ -254,19 +327,31 @@ private struct ArtboardFrame: View {
         .onTapGesture(count: 2) { newName = artboard.name; renaming = true }
         .onTapGesture { session.select(CanvasSelection(artboardID: artboard.id, elementID: nil)) }
         .gesture(
-            DragGesture(minimumDistance: 3)
-                .onChanged { v in
-                    guard session.isEditable else { return }
-                    dragOffset = v.translation
+            DragGesture(minimumDistance: 3, coordinateSpace: .named(CanvasCoordinateSpace.viewport))
+                .updating($isDragging) { _, active, transaction in
+                    active = true
+                    transaction.animation = nil
                 }
-                .onEnded { v in
-                    guard session.isEditable else { return }
-                    let z = session.zoom
-                    session.moveArtboard(artboard.id, by: CGSize(width: v.translation.width / z, height: v.translation.height / z))
-                    dragOffset = .zero
+                .onChanged { value in
+                    guard session.isEditable, !renaming else { return }
+                    if !drag.isMoving(artboard.id) {
+                        let neighbors = (session.currentPage?.artboards ?? []).filter { $0.id != artboard.id }
+                        drag.begin(artboard, at: session.worldPoint(value.startLocation), neighbors: neighbors.map(\.frame))
+                        session.select(CanvasSelection(artboardID: artboard.id, elementID: nil))
+                        session.userMovedViewport()
+                    }
+                    drag.update(artboard, at: session.worldPoint(value.location), zoom: session.zoom)
+                }
+                .onEnded { value in
+                    guard drag.isMoving(artboard.id) else { return }
+                    defer { drag.clear(artboard.id) }
+                    drag.update(artboard, at: session.worldPoint(value.location), zoom: session.zoom)
+                    if let origin = drag.result?.frame.origin {
+                        session.moveArtboard(artboard.id, to: origin)
+                    }
                 }
         )
-        .pointerStyle(.grabIdle)
+        .pointerStyle(drag.isMoving(artboard.id) ? .grabActive : .grabIdle)
     }
 }
 
@@ -274,6 +359,7 @@ private struct ArtboardFrame: View {
 
 private struct SelectionLayer: View {
     let session: ProjectSession
+    let drag: ArtboardDragPreview
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -301,7 +387,7 @@ private struct SelectionLayer: View {
                 } else if sel.elementID != nil, let props = session.selectedProps, let rect = elementRect(board.id, props.rect) {
                     SelectionBox(rect: rect, label: "\(Int(props.rect.w.rounded())) × \(Int(props.rect.h.rounded()))")
                 } else if sel.elementID == nil {
-                    SelectionBox(rect: session.viewRect(board.frame),
+                    SelectionBox(rect: session.viewRect(drag.frame(for: board)),
                                  label: "\(Int(board.width)) × \(Int(board.height))")
                 }
             }
@@ -310,7 +396,8 @@ private struct SelectionLayer: View {
 
     private func elementRect(_ artboardID: UUID, _ r: ElementRect) -> CGRect? {
         guard let board = session.currentPage?.artboards.first(where: { $0.id == artboardID }) else { return nil }
-        return session.viewRect(CGRect(x: board.x + r.x, y: board.y + r.y, width: r.w, height: r.h))
+        let frame = drag.frame(for: board)
+        return session.viewRect(CGRect(x: frame.minX + r.x, y: frame.minY + r.y, width: r.w, height: r.h))
     }
 }
 
@@ -379,7 +466,7 @@ private struct ToolCaptureLayer: View {
             }
         }
         .gesture(
-            DragGesture(minimumDistance: 0)
+            DragGesture(minimumDistance: 0, coordinateSpace: .named(CanvasCoordinateSpace.viewport))
                 .onChanged { v in
                     if session.tool == .hand {
                         if panStart == nil { panStart = session.pan; session.userMovedViewport() }
@@ -396,8 +483,11 @@ private struct ToolCaptureLayer: View {
                 }
                 .onEnded { v in
                     defer { dragStart = nil; dragCurrent = nil; panStart = nil }
-                    guard session.tool != .hand else { return }
-                    finish(start: v.startLocation, end: v.location)
+                    if let p = panStart {
+                        session.pan = CGPoint(x: p.x + v.translation.width, y: p.y + v.translation.height)
+                    } else if session.tool != .hand {
+                        finish(start: v.startLocation, end: v.location)
+                    }
                 }
         )
         .pointerStyle(pointer)
