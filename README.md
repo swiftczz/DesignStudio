@@ -1,10 +1,10 @@
 # DesignStudio
 
-一个仿照 **Claude Design** 交互的原生 macOS 设计画布应用（SwiftUI · Liquid Glass · SPM）。
+一个原生 macOS AI 设计画布应用（SwiftUI · Liquid Glass · SPM）。
 
 用自然语言描述想法 → AI 在画布上实时生成可交互的 HTML 设计稿 → 继续对话、直接在画布上批注元素、拖动参数微调 → 导出或交给 Claude Code 落地成生产代码。
 
-与 Claude Design 不同的是，它可以接入多种模型来源：
+可以接入多种模型来源：
 
 | 来源 | 登录 / 鉴权方式 | 说明 |
 | --- | --- | --- |
@@ -164,6 +164,5 @@ git push origin v0.2.0
 
 ## 说明
 
-- 「Claude Design」是 Anthropic 的产品，本项目只是交互上的致敬实现，与 Anthropic 无关。
-- 使用订阅账号时请遵守 Anthropic / OpenAI 的使用条款：本应用只是在你本机调用你自己安装并登录的官方 CLI，不代理、不转发、不共享凭据。
+- 使用订阅账号时请遵守 Anthropic / OpenAI / Google 的使用条款：本应用只是在你本机调用你自己安装并登录的官方 CLI，不代理、不转发、不共享凭据。
 - 生成的设计会加载 Google Fonts、Tailwind CDN 等外部资源，离线时样式可能不完整。
