@@ -48,7 +48,8 @@ final class ProjectSession {
 
     // MARK: 面板
     var showChat = true
-    var showInspector = true
+    /// 进入项目时只显示对话栏和画布，检查器按需打开
+    var showInspector = false
     var showAskAI = false
     /// 全屏（专注模式）：当前聚焦的画板；非 nil 即处于全屏
     private(set) var previewArtboardID: UUID?
@@ -117,7 +118,18 @@ final class ProjectSession {
 
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
-    var isEditable: Bool { !isGenerating }
+    /// 生成过程中也可以平移画布、查看和修改元素；只有正在被模型重写的画板不能编辑（见 streamingArtboardIDs）
+    var isEditable: Bool { true }
+
+    /// 生成中正在被模型输出覆盖的画板：每隔一会儿就会重新加载，期间不能选中或编辑
+    private(set) var streamingArtboardIDs: Set<UUID> = []
+    /// 生成过程中用户自己移动 / 缩放过画布：之后不再自动「适应画布」，免得把视图拽走
+    private var viewportAdjustedDuringGeneration = false
+
+    /// 用户手动平移 / 缩放画布
+    func userMovedViewport() {
+        if isGenerating { viewportAdjustedDuringGeneration = true }
+    }
 
     var pendingComments: [CanvasComment] { project?.comments.filter { !$0.resolved } ?? [] }
 
@@ -135,7 +147,8 @@ final class ProjectSession {
     }
 
     func editorMode(for artboardID: UUID) -> EditorMode {
-        guard isEditable, !interactivePreview, !tool.capturesPointer else { return .off }
+        guard isEditable, !interactivePreview, !tool.capturesPointer,
+              !streamingArtboardIDs.contains(artboardID) else { return .off }
         return tool == .comment ? .comment : .select
     }
 
@@ -164,6 +177,7 @@ final class ProjectSession {
     func setZoom(_ newZoom: Double, anchor: CGPoint? = nil) {
         let z = min(max(newZoom, 0.05), 4)
         let a = anchor ?? CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2)
+        userMovedViewport()
         let ratio = z / zoom
         pan = CGPoint(x: a.x - (a.x - pan.x) * ratio, y: a.y - (a.y - pan.y) * ratio)
         zoom = z
@@ -174,6 +188,7 @@ final class ProjectSession {
     func zoomTo100() { setZoom(1) }
 
     func panBy(dx: Double, dy: Double) {
+        userMovedViewport()
         pan = CGPoint(x: pan.x + dx, y: pan.y + dy)
     }
 
@@ -529,7 +544,9 @@ final class ProjectSession {
 
     func addArtboard(frame: CGRect? = nil, at center: CGPoint? = nil) {
         guard isEditable else { return }
-        let size = frame?.size ?? kind.artboardSize
+        // 新画板沿用选中画板或页面上最后一个画板的尺寸（网页设计就加网页尺寸，幻灯片就加幻灯片尺寸）
+        let reference = selection.flatMap { document.artboard($0.artboardID) } ?? currentPage?.artboards.last
+        let size = frame?.size ?? reference.map { CGSize(width: $0.width, height: $0.height) } ?? kind.artboardSize
         var origin = frame?.origin ?? CGPoint.zero
         if frame == nil {
             if let center { origin = CGPoint(x: center.x - size.width / 2, y: center.y - size.height / 2) }
@@ -645,6 +662,12 @@ final class ProjectSession {
 
     /// 修改文档：记录撤销点并保存到项目
     private func commit(_ mutate: (inout DesignDocument) -> Void) {
+        // 生成中画布显示的是实时预览文档：同样的修改也作用到它上面，生成结束合并时不会丢掉
+        // （正在生成的新画板只存在于预览文档里，例如拖动它的位置）
+        if var live = liveDocument {
+            mutate(&live)
+            if live != liveDocument { liveDocument = live }
+        }
         var next = document
         mutate(&next)
         guard next != document else { return }
@@ -653,6 +676,13 @@ final class ProjectSession {
         redoStack.removeAll()
         document = next
         persist()
+    }
+
+    /// 撤销 / 重做时文档整体替换：按已收到的模型输出重新生成实时预览
+    private func rebuildLivePreview() {
+        guard isGenerating, liveDocument != nil else { return }
+        liveDocument = nil
+        updateLivePreview()
     }
 
     private func persist() {
@@ -665,6 +695,7 @@ final class ProjectSession {
         redoStack.append(document)
         document = prev
         persist()
+        rebuildLivePreview()
         reconcileSelection()
     }
 
@@ -673,6 +704,7 @@ final class ProjectSession {
         undoStack.append(document)
         document = next
         persist()
+        rebuildLivePreview()
         reconcileSelection()
     }
 
@@ -845,6 +877,8 @@ final class ProjectSession {
         streamingThinking = ""
         streamingMessageID = assistant.id
         liveDocument = nil
+        streamingArtboardIDs = []
+        viewportAdjustedDuringGeneration = false
         lastLiveUpdate = .distantPast
         generationPageID = pageID ?? document.pages.first?.id
         generationTarget = target
@@ -910,9 +944,14 @@ final class ProjectSession {
         guard !parsed.isEmpty else { return }
         var live = liveDocument ?? document
         let before = live.page(generationPageID)?.artboards.count ?? 0
-        live.merge(parsed, into: generationPageID, kind: kind, fallbackTarget: generationTarget)
+        let changed = live.merge(parsed, into: generationPageID, kind: kind, fallbackTarget: generationTarget)
         liveDocument = live
-        if generationStartedEmpty, (live.page(generationPageID)?.artboards.count ?? 0) > before {
+        streamingArtboardIDs.formUnion(changed)
+        if let sel = selection, streamingArtboardIDs.contains(sel.artboardID), sel.elementID != nil {
+            clearSelection()   // 选中的元素所在画板正在被重写
+        }
+        if generationStartedEmpty, !viewportAdjustedDuringGeneration,
+           (live.page(generationPageID)?.artboards.count ?? 0) > before {
             DispatchQueue.main.async { [weak self] in self?.zoomToFit() }
         }
     }
@@ -945,7 +984,9 @@ final class ProjectSession {
             let next = (project?.versions.map(\.number).max() ?? 0) + 1
             newVersion = DesignVersion(number: next, document: document,
                                        summary: DesignPrompt.summary(from: text), truncated: truncated)
-            if generationStartedEmpty { DispatchQueue.main.async { [weak self] in self?.zoomToFit() } }
+            if generationStartedEmpty, !viewportAdjustedDuringGeneration {
+                DispatchQueue.main.async { [weak self] in self?.zoomToFit() }
+            }
         }
 
         app.updateProject(projectID) { p in
@@ -968,6 +1009,7 @@ final class ProjectSession {
         streamingThinking = ""
         status = nil
         liveDocument = nil
+        streamingArtboardIDs = []
         task = nil
         wasCancelled = false
         generationElement = nil

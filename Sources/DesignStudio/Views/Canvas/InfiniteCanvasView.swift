@@ -343,7 +343,7 @@ private struct ToolCaptureLayer: View {
             DragGesture(minimumDistance: 0)
                 .onChanged { v in
                     if session.tool == .hand {
-                        if panStart == nil { panStart = session.pan }
+                        if panStart == nil { panStart = session.pan; session.userMovedViewport() }
                         if let p = panStart {
                             session.pan = CGPoint(x: p.x + v.translation.width, y: p.y + v.translation.height)
                         }
