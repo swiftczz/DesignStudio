@@ -65,19 +65,34 @@ jobs:
           cat CHANGELOG.md
 
       - name: Build DMG
-        env:
-          BUILD_NUMBER: ${{ github.run_number }}
         run: ./Scripts/release-dmg.sh "${{ steps.ver.outputs.version }}"
 
       - name: List DMG
         run: ls -lh "dist/DesignStudio-${{ steps.ver.outputs.version }}.dmg"
 
-      - name: Upload DMG to Release
+      - name: Generate signed appcast
         if: steps.ver.outputs.is_tag == 'true'
-        uses: softprops/action-gh-release@v3
-        with:
-          files: dist/DesignStudio-${{ steps.ver.outputs.version }}.dmg
-          body_path: CHANGELOG.md
+        env:
+          SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          bash Scripts/generate-appcast.sh "dist/DesignStudio-${VERSION}.dmg" CHANGELOG.md \
+            "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/"
+
+      - name: Publish DMG and appcast
+        if: steps.ver.outputs.is_tag == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          assets=("dist/DesignStudio-${VERSION}.dmg" dist/appcast.xml)
+          if [[ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null)" == true ]]; then
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+            gh release edit "$GITHUB_REF_NAME" --draft=false --latest --notes-file CHANGELOG.md
+          else
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" --verify-tag --latest \
+              --title "$GITHUB_REF_NAME" --notes-file CHANGELOG.md
+          fi
 
       - name: Upload DMG as workflow artifact
         if: steps.ver.outputs.is_tag == 'false'

@@ -28,6 +28,18 @@
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>SUFeedURL</key>
+    <string>https://github.com/swiftczz/DesignStudio/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>Su7yVahLce+uFWzNAJWquc3tocbFpvjr6gy0LXy1lzk=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <false/>
+    <key>SUAllowsAutomaticUpdates</key>
+    <false/>
+    <key>SUVerifyUpdateBeforeExtraction</key>
+    <true/>
+    <key>SURequireSignedFeed</key>
+    <true/>
     <key>NSAppTransportSecurity</key>
     <dict>
         <!-- 允许连接 http 的自建/本地兼容接口（如 Ollama、内网网关） -->

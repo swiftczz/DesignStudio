@@ -21,6 +21,7 @@ struct DesignStudioApp: App {
             RootView()
                 .environment(app)
                 .frame(minWidth: 1080, minHeight: 680)
+                .onAppear { app.softwareUpdater.start(legacyAutomaticChecks: app.settings.automaticallyChecksForUpdates) }
                 .task { await app.auth.refreshAll(profiles: app.providers) }
         }
         .defaultSize(width: 1480, height: 920)
@@ -38,15 +39,6 @@ struct DesignStudioApp: App {
         .defaultSize(width: 900, height: 640)
         .windowToolbarStyle(.unified)
         .commandsRemoved()
-
-        Window("软件更新", id: UpdateCheckView.windowID) {
-            UpdateCheckView()
-                .environment(app)
-                .tint(Theme.accent)
-        }
-        .windowResizability(.contentSize)
-        .restorationBehavior(.disabled)
-        .commandsRemoved()
     }
 }
 
@@ -60,10 +52,8 @@ struct AppCommands: Commands {
 
     var body: some Commands {
         CommandGroup(after: .appInfo) {
-            Button(app.isCheckingForUpdates ? "正在检查更新…" : "检查更新…") {
-                UpdateCheckPresentation.start(app: app, openWindow: openWindow)
-            }
-            .disabled(app.isCheckingForUpdates)
+            Button("检查更新…", action: app.softwareUpdater.checkForUpdates)
+                .disabled(!app.softwareUpdater.canCheckForUpdates)
         }
         CommandGroup(replacing: .appSettings) {
             Button("设置…") { openWindow(id: SettingsWindow.id) }

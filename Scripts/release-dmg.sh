@@ -21,7 +21,7 @@ APP_NAME="DesignStudio"
 APP="build/${APP_NAME}.app"
 
 VERSION="${1:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Support/Info.plist)}"
-BUILD_NUMBER="${BUILD_NUMBER:-$(date +%Y%m%d%H%M)}"
+BUILD_NUMBER="${BUILD_NUMBER:-${VERSION}}"
 DMG="dist/${APP_NAME}-${VERSION}.dmg"
 
 # ---------- 签名身份 ----------

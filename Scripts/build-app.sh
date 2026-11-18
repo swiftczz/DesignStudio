@@ -25,13 +25,20 @@ if [ "${BIN_ARCHS}" != "${ARCH}" ]; then
 fi
 
 rm -rf "${APP}"
-mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
+mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources" "${APP}/Contents/Frameworks"
 cp "${BIN_DIR}/${APP_NAME}" "${APP}/Contents/MacOS/${APP_NAME}"
 cp Support/Info.plist "${APP}/Contents/Info.plist"
+SPARKLE="${APP}/Contents/Frameworks/Sparkle.framework"
+ditto .build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework "${SPARKLE}"
+# SwiftPM 会写入构建机的框架搜索路径，打包后只保留相对路径。
+while IFS= read -r rpath; do
+  install_name_tool -delete_rpath "${rpath}" "${APP}/Contents/MacOS/${APP_NAME}"
+done < <(otool -l "${APP}/Contents/MacOS/${APP_NAME}" | sed -nE 's/^ +path (\/.*) \(offset [0-9]+\)$/\1/p')
 
 PLIST="${APP}/Contents/Info.plist"
 [ -n "${VERSION:-}" ] && /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "${PLIST}"
-[ -n "${BUILD_NUMBER:-}" ] && /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER}" "${PLIST}"
+BUILD_NUMBER="${BUILD_NUMBER:-${VERSION:-}}"
+[ -n "${BUILD_NUMBER}" ] && /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER}" "${PLIST}"
 
 # 如果存在 SPM 资源包也一并拷贝
 for bundle in "${BIN_DIR}"/*.bundle; do
@@ -46,13 +53,21 @@ fi
 
 if [ "${SIGN_IDENTITY}" = "-" ]; then
   # ad-hoc 签名：本机运行没问题；发给别人时对方需要在「隐私与安全性」里允许一次
-  codesign --force --deep --sign - "${APP}"
+  codesign --force --sign - "${APP}"
 else
+  # Hardened Runtime 要求内嵌代码和主应用使用同一个 Team ID。先签内层，再签框架和主应用。
+  SPARKLE_VERSION="${SPARKLE}/Versions/Current"
+  for helper in "${SPARKLE_VERSION}/Autoupdate" "${SPARKLE_VERSION}/Updater.app" "${SPARKLE_VERSION}/XPCServices/"*.xpc; do
+    codesign --force --options runtime --timestamp --preserve-metadata=entitlements \
+      --sign "${SIGN_IDENTITY}" "${helper}"
+  done
+  codesign --force --options runtime --timestamp --sign "${SIGN_IDENTITY}" "${SPARKLE}"
   # Developer ID：开启 Hardened Runtime 并带时间戳（公证的必要条件）
   codesign --force --options runtime --timestamp \
     --entitlements Support/DesignStudio.entitlements \
     --sign "${SIGN_IDENTITY}" "${APP}"
 fi
+codesign --verify --deep --strict "${APP}"
 
 echo "✅ 已生成 ${APP}"
 echo "   运行：open ${APP}"

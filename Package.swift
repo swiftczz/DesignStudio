@@ -17,17 +17,20 @@ let package = Package(
         .executable(name: "DesignStudio", targets: ["DesignStudio"])
     ],
     dependencies: [
-        .package(url: "https://github.com/swiftlang/swift-cmark.git", from: "0.9.0")
+        .package(url: "https://github.com/swiftlang/swift-cmark.git", from: "0.9.0"),
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.1")
     ],
     targets: [
         .executableTarget(
             name: "DesignStudio",
             dependencies: [
                 .product(name: "cmark-gfm", package: "swift-cmark"),
-                .product(name: "cmark-gfm-extensions", package: "swift-cmark")
+                .product(name: "cmark-gfm-extensions", package: "swift-cmark"),
+                .product(name: "Sparkle", package: "Sparkle")
             ],
             path: "Sources/DesignStudio",
-            swiftSettings: appSettings
+            swiftSettings: appSettings,
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
         ),
         .testTarget(
             name: "DesignStudioTests",

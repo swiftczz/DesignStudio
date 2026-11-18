@@ -40,6 +40,8 @@ xattr -dr com.apple.quarantine /Applications/DesignStudio.app
 
 系统要求：搭载 Apple 芯片的 Mac，运行 macOS 26 Tahoe 或更新版本。
 
+安装含应用内更新功能的版本后，可通过菜单「DesignStudio → 检查更新…」下载、校验并安装新版，然后重新启动 DesignStudio。自动检查可在「设置 → 通用 → 软件更新」开启。
+
 ## 环境要求
 
 - 搭载 Apple 芯片的 Mac，运行 macOS 26 Tahoe 或更新版本
@@ -155,6 +157,8 @@ Sources/DesignStudio
 ## 发布
 
 推送 `v*` tag 会触发 GitHub Actions（`.github/workflows/release.yml`）：运行测试 → 按 Conventional Commits 生成更新说明 → 编译 arm64 DMG → 发布到 Releases。
+
+发布时，工作流使用仓库的 `SPARKLE_PRIVATE_ED_KEY` Actions secret 为 DMG 和 `appcast.xml` 签名，上传两者后再公开 Release。签名私钥必须与 `Support/Info.plist` 中的 `SUPublicEDKey` 配对。本机的签名密钥保存在钥匙串的 `app.designstudio.mac` Sparkle 账户中。
 
 ```bash
 git tag v0.2.0
