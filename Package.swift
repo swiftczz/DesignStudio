@@ -1,4 +1,4 @@
-// swift-tools-version: 6.4
+// swift-tools-version: 6.2
 import PackageDescription
 
 /// Swift 6 语言模式（严格并发检查），UI 应用默认 MainActor 隔离 + Approachable Concurrency

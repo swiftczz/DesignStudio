@@ -42,7 +42,7 @@ xattr -dr com.apple.quarantine /Applications/DesignStudio.app
 ## 环境要求
 
 - macOS 26 Tahoe 及以上
-- Xcode 27.x（Swift 6.4 工具链；Swift 6 语言模式，默认 MainActor 隔离）
+- Xcode 26 及以上（Swift 6.2+ 工具链；Swift 6 语言模式，默认 MainActor 隔离）
 
 ## 运行
 
