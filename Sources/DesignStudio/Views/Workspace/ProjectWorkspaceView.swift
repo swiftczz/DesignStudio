@@ -249,6 +249,15 @@ struct ExportMenu: View {
                     Button("拷贝 HTML", systemImage: "doc.on.doc") { ExportService.copyHTML(board.html) }
                 }
                 Section("当前画布（\(boards.count) 个画板）") {
+                    Button("导出为一个 HTML 文件…", systemImage: "doc.richtext") {
+                        let name = boards.count > 1 || session.document.pages.count > 1
+                            ? "\(project.name)-\(session.currentPage?.displayName ?? "画布")" : project.name
+                        ExportService.exportCanvasHTML(boards, kind: session.kind, name: name)
+                    }
+                    Button("在浏览器中打开整个画布", systemImage: "safari") {
+                        ExportService.openInBrowser(CanvasBundle.make(title: project.name, artboards: boards, kind: session.kind),
+                                                    name: "\(project.name)-画布")
+                    }
                     Button("导出全部 HTML…", systemImage: "folder") {
                         ExportService.exportAllHTML(boards, projectName: project.name)
                     }

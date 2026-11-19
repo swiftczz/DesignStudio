@@ -249,3 +249,27 @@ struct ArtboardAutoHeightTests {
         #expect(code?.contains("100vh") == true)
     }
 }
+
+struct CanvasBundleTests {
+    @Test func bundlesEveryArtboardAsIsolatedDocument() throws {
+        let boards = [
+            Artboard(name: "首页", html: "<!DOCTYPE html><html><body><script>var a = '</script>';</script><!-- x --></body></html>",
+                     x: 0, y: 0, width: 1440, height: 3200),
+            Artboard(name: "手机 <详情>", html: "<!DOCTYPE html><html><body>m</body></html>", x: 1520, y: 0, width: 390, height: 844),
+        ]
+        let html = CanvasBundle.make(title: "Weft & 社区", artboards: boards, kind: .prototype)
+        #expect(html.contains("<title>Weft &amp; 社区</title>"))
+        // 画板源码只出现在 JSON 数据里，不会提前结束外层的 <script>
+        let data = try #require(html.range(of: #"<script type="application/json" id="ds-data">"#))
+        let end = try #require(html.range(of: "</script>", range: data.upperBound..<html.endIndex))
+        let json = String(html[data.upperBound..<end.lowerBound])
+        #expect(!json.contains("<"))
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        let parsed = try #require(payload["boards"] as? [[String: Any]])
+        #expect(parsed.count == 2)
+        #expect(parsed[0]["html"] as? String == boards[0].html && parsed[0]["auto"] as? Bool == true)
+        #expect(parsed[1]["name"] as? String == "手机 <详情>" && parsed[1]["auto"] as? Bool == false)
+        #expect(payload["mode"] as? String == "canvas")
+        #expect(CanvasBundle.make(title: "deck", artboards: boards, kind: .slides).contains(#""mode":"single""#))
+    }
+}

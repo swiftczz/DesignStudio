@@ -25,7 +25,7 @@ struct ElementClipboard: Codable, Equatable {
 }
 
 extension String {
-    var htmlEscaped: String {
+    nonisolated var htmlEscaped: String {
         replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
