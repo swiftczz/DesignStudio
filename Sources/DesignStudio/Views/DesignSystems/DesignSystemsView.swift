@@ -16,35 +16,36 @@ struct DesignSystemsView: View {
                 }
                 .listStyle(.inset)
 
-                Divider()
-                HStack(spacing: 6) {
-                    Button {
-                        selection = app.addDesignSystem(.blank())
-                    } label: { Image(systemName: "plus") }
-                    .help("新建设计系统")
+                SidebarFooterBar {
+                    HStack(spacing: 6) {
+                        Button {
+                            selection = app.addDesignSystem(.blank())
+                        } label: { Image(systemName: "plus") }
+                        .help("新建设计系统")
 
-                    Button {
-                        guard let id = selection, var copy = app.designSystem(for: id) else { return }
-                        copy.id = UUID()
-                        copy.name += " 副本"
-                        copy.colors = copy.colors.map { ColorToken(name: $0.name, hex: $0.hex) }
-                        selection = app.addDesignSystem(copy)
-                    } label: { Image(systemName: "plus.square.on.square") }
-                    .help("复制")
-                    .disabled(selection == nil)
+                        Button {
+                            guard let id = selection, var copy = app.designSystem(for: id) else { return }
+                            copy.id = UUID()
+                            copy.name += " 副本"
+                            copy.colors = copy.colors.map { ColorToken(name: $0.name, hex: $0.hex) }
+                            selection = app.addDesignSystem(copy)
+                        } label: { Image(systemName: "plus.square.on.square") }
+                        .help("复制")
+                        .disabled(selection == nil)
 
-                    Button {
-                        guard let id = selection else { return }
-                        app.deleteDesignSystem(id)
-                        selection = app.designSystems.first?.id
-                    } label: { Image(systemName: "minus") }
-                    .help("删除")
-                    .disabled(selection == nil)
+                        Button {
+                            guard let id = selection else { return }
+                            app.deleteDesignSystem(id)
+                            selection = app.designSystems.first?.id
+                        } label: { Image(systemName: "minus") }
+                        .help("删除")
+                        .disabled(selection == nil)
 
-                    Spacer()
+                        Spacer()
+                    }
+                    .buttonStyle(.borderless)
+                    .padding(.horizontal, 8)
                 }
-                .buttonStyle(.borderless)
-                .padding(8)
             }
             .frame(minWidth: 220, idealWidth: 260, maxWidth: 340)
 

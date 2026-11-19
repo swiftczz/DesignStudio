@@ -217,8 +217,7 @@ private struct SidebarFooter: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Divider()
+        SidebarFooterBar {
             HStack(spacing: 10) {
                 ForEach(problems) { p in problemBadge(p) }
                 Spacer()
@@ -234,7 +233,6 @@ private struct SidebarFooter: View {
             }
             .font(.caption)
             .padding(.horizontal, 14)
-            .padding(.bottom, 10)
         }
         .animation(.snappy(duration: 0.2), value: problems.map(\.id))
     }
