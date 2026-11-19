@@ -3,7 +3,7 @@ import AppKit
 
 /// 可选的主题色
 enum ThemeColor: String, CaseIterable, Identifiable {
-    case terracotta, system, blue, indigo, purple, pink, red, green, teal, graphite
+    case system, blue, terracotta, indigo, purple, pink, red, green, teal, graphite
 
     var id: String { rawValue }
 
