@@ -145,6 +145,18 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
         return nil
     }
 
+    /// 改画板尺寸，并挪开右侧和下方的画板，保持原来的间距
+    mutating func resizeArtboard(_ id: UUID, width: Double? = nil, height: Double? = nil) {
+        for p in pages.indices {
+            guard let i = pages[p].artboards.firstIndex(where: { $0.id == id }) else { continue }
+            let old = pages[p].artboards[i].frame
+            if let width { pages[p].artboards[i].width = width }
+            if let height { pages[p].artboards[i].height = height }
+            pages[p].reflow(after: id, from: old)
+            return
+        }
+    }
+
     /// 替换画布的共用样式；内容没变时返回 false
     @discardableResult
     mutating func setSharedCSS(_ css: String, in pageID: UUID?) -> Bool {
@@ -223,6 +235,7 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
 
             if let i = target {
                 let current = page.artboards[i]
+                let oldFrame = current.frame
                 guard current.html != html || (out.width ?? current.width) != current.width
                     || (!out.autoHeight && (out.height ?? current.height) != current.height)
                     || (out.autoHeight && current.autoHeight != true) else { continue }
@@ -231,6 +244,8 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
                 // height=auto：保留画布按内容量出的高度
                 if out.autoHeight { page.artboards[i].autoHeight = true }
                 else if let h = out.height { page.artboards[i].height = h }
+                // 尺寸变了：挪开右侧和下方的画板，保持原来的间距
+                page.reflow(after: current.id, from: oldFrame)
                 changed.append(page.artboards[i].id)
             } else {
                 let name = out.name ?? Self.defaultName(kind: kind, index: page.artboards.count + 1 + n)
@@ -294,4 +309,72 @@ nonisolated struct ParsedArtboard: Equatable, Sendable {
     var html: String
     /// 代码块是否已闭合
     var complete: Bool
+}
+
+// MARK: - 画板尺寸变化后的避让
+
+extension DesignPage {
+    /// 画板尺寸从 old 变成现在的大小后，挪动周围的画板，保持原来的间距：
+    /// - 变高 / 变矮：同一行最低处变化多少，整行下面的画板就上下挪多少（各行仍然对齐）；
+    /// - 变宽 / 变窄：同一行右侧的画板（以及跟它们相连的画板）左右挪动同样的距离。
+    /// 缩小时只挪到不会碰到其他画板为止。
+    nonisolated mutating func reflow(after id: UUID, from old: CGRect) {
+        guard let i = artboards.firstIndex(where: { $0.id == id }) else { return }
+        let new = artboards[i].frame
+        guard new.size != old.size else { return }
+        let others = artboards.indices.filter { $0 != i }
+
+        // 纵向：与原画板上下重叠的是同一行
+        let row = others.filter { Self.overlap(artboards[$0].frame, old, vertical: true) }
+        let oldBottom = row.map { artboards[$0].frame.maxY }.reduce(old.maxY, max)
+        let newBottom = row.map { artboards[$0].frame.maxY }.reduce(new.maxY, max)
+        let below = others.filter { artboards[$0].frame.minY >= oldBottom - 0.5 }
+        shift(below, by: newBottom - oldBottom, after: oldBottom, vertical: true)
+
+        // 横向：同一行里在右侧的画板，以及与它们左右相连的画板
+        var right = row.filter { artboards[$0].frame.minX >= old.maxX - 0.5 }
+        var changed = true
+        while changed {
+            changed = false
+            for r in right {
+                for n in others where !right.contains(n) && !below.contains(n)
+                    && artboards[n].frame.minX >= artboards[r].frame.maxX - 0.5
+                    && Self.overlap(artboards[n].frame, artboards[r].frame, vertical: true) {
+                    right.append(n)
+                    changed = true
+                }
+            }
+        }
+        shift(right, by: new.maxX - old.maxX, after: old.maxX, vertical: false)
+    }
+
+    /// 两个矩形在另一个方向上是否有重叠（vertical: 比较上下范围）
+    nonisolated private static func overlap(_ a: CGRect, _ b: CGRect, vertical: Bool) -> Bool {
+        vertical ? a.minY < b.maxY && b.minY < a.maxY : a.minX < b.maxX && b.minX < a.maxX
+    }
+
+    /// 平移一组画板。往回收（delta < 0）时，保证不会比原来的间距更贴近其他画板
+    nonisolated private mutating func shift(_ indices: [Int], by delta: Double, after edge: Double, vertical: Bool) {
+        guard abs(delta) > 0.5, !indices.isEmpty else { return }
+        var d = delta
+        if d < 0 {
+            let moving = Set(indices)
+            let start: (CGRect) -> Double = { vertical ? $0.minY : $0.minX }
+            let end: (CGRect) -> Double = { vertical ? $0.maxY : $0.maxX }
+            let gap = max(indices.map { start(artboards[$0].frame) }.min()! - edge, 0)
+            for m in indices {
+                let mf = artboards[m].frame
+                for n in artboards.indices where !moving.contains(n) {
+                    let nf = artboards[n].frame
+                    guard Self.overlap(mf, nf, vertical: !vertical), end(nf) <= start(mf) + 0.5 else { continue }
+                    d = max(d, -max(start(mf) - end(nf) - gap, 0))
+                }
+            }
+        }
+        d = (d * 1000).rounded() / 1000   // 去掉浮点误差，画板坐标保持整齐
+        guard abs(d) > 0.5 else { return }
+        for k in indices {
+            if vertical { artboards[k].y += d } else { artboards[k].x += d }
+        }
+    }
 }

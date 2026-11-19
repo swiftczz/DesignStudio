@@ -382,3 +382,92 @@ struct ZipExportTests {
         #expect(try Data(contentsOf: url).count < page.utf8.count)   // 确实压缩了
     }
 }
+
+struct ArtboardReflowTests {
+    /// 两行：第一行 A B C（手机，间距 80），第二行 D E（第一行下方 200）
+    static func page() -> DesignPage {
+        func b(_ n: String, _ x: Double, _ y: Double, _ w: Double = 390, _ h: Double = 844) -> Artboard {
+            Artboard(name: n, html: "<p>\(n)</p>", x: x, y: y, width: w, height: h)
+        }
+        return DesignPage(name: "p", artboards: [
+            b("A", 0, 0), b("B", 470, 0), b("C", 940, 0),
+            b("D", 0, 1044), b("E", 470, 1044),
+        ])
+    }
+
+    func frames(_ page: DesignPage) -> [String: CGRect] {
+        Dictionary(uniqueKeysWithValues: page.artboards.map { ($0.name, $0.frame) })
+    }
+
+    func noOverlaps(_ page: DesignPage) -> Bool {
+        let f = page.artboards.map(\.frame)
+        for i in f.indices { for j in f.indices where i < j && f[i].intersects(f[j]) { return false } }
+        return true
+    }
+
+    @Test func widerArtboardPushesRowRightKeepingGap() {
+        var doc = DesignDocument(pages: [Self.page()])
+        let a = doc.pages[0].artboards[0].id
+        doc.resizeArtboard(a, width: 1440)
+        let f = frames(doc.pages[0])
+        #expect(f["B"]!.minX == 1440 + 80 && f["C"]!.minX == f["B"]!.maxX + 80)
+        #expect(f["D"]!.minX == 0 && f["E"]!.minX == 470)   // 下一行不受横向影响
+        #expect(noOverlaps(doc.pages[0]))
+
+        doc.resizeArtboard(a, width: 390)   // 变回去，右侧画板跟着回来
+        #expect(frames(doc.pages[0]) == frames(Self.page()))
+    }
+
+    @Test func tallerArtboardPushesLowerRowsDown() {
+        var doc = DesignDocument(pages: [Self.page()])
+        let b = doc.pages[0].artboards[1].id
+        doc.resizeArtboard(b, height: 3000)
+        let f = frames(doc.pages[0])
+        #expect(f["D"]!.minY == 3000 + 200 && f["E"]!.minY == 3000 + 200)   // 整行一起挪，仍然对齐
+        #expect(f["A"]!.minY == 0 && f["C"]!.minX == 940)
+        #expect(noOverlaps(doc.pages[0]))
+
+        doc.resizeArtboard(b, height: 844)
+        #expect(frames(doc.pages[0]) == frames(Self.page()))
+    }
+
+    @Test func growthWithinTallestInRowMovesNothingBelow() {
+        var page = Self.page()
+        page.artboards[2].height = 2000          // C 最高
+        page.artboards[3].y = 2200; page.artboards[4].y = 2200
+        var doc = DesignDocument(pages: [page])
+        doc.resizeArtboard(page.artboards[0].id, height: 1500)   // A 变高但没超过 C
+        let f = frames(doc.pages[0])
+        #expect(f["D"]!.minY == 2200 && f["E"]!.minY == 2200)
+        // 再超过 C：只挪超出的部分
+        doc.resizeArtboard(page.artboards[0].id, height: 2600)
+        #expect(frames(doc.pages[0])["D"]!.minY == 2800)
+        #expect(noOverlaps(doc.pages[0]))
+    }
+
+    @Test func shrinkingNeverPullsIntoOtherArtboards() {
+        // C 在 A 右边，但 C 下面紧挨着 F；A 变窄时 B C 左移，不会撞上左下方的画板
+        var page = Self.page()
+        page.artboards.append(Artboard(name: "F", html: "", x: 470, y: 900, width: 390, height: 100))
+        var doc = DesignDocument(pages: [page])
+        doc.resizeArtboard(page.artboards[0].id, width: 200)
+        #expect(noOverlaps(doc.pages[0]))
+        let bx = Double(frames(doc.pages[0])["B"]!.minX)
+        #expect(bx == 280, "B.minX = \(bx.debugDescription)")
+    }
+
+    @Test func aiReplyWithNewSizeReflowsNeighbours() {
+        var doc = DesignDocument(pages: [Self.page()])
+        let reply = """
+        改成桌面版。
+        ```html artboard="A" width=1440 height=900
+        <!DOCTYPE html><html><body>A</body></html>
+        ```
+        """
+        doc.merge(ArtboardParser.parse(reply), into: nil, kind: .prototype)
+        let f = frames(doc.pages[0])
+        #expect(f["A"]!.size == CGSize(width: 1440, height: 900))
+        #expect(f["B"]!.minX == 1520 && f["D"]!.minY == 1100)
+        #expect(noOverlaps(doc.pages[0]))
+    }
+}

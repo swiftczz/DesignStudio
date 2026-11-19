@@ -859,14 +859,20 @@ final class ProjectSession {
         let target = min(max(contentHeight.rounded(.up), board.viewportHeight), 30000)
         guard abs(target - board.height) >= 2 else { return }
         if var live = liveDocument {
-            live.updateArtboard(id) { $0.height = target }
+            live.resizeArtboard(id, height: target)
             liveDocument = live
         }
         guard document.artboard(id) != nil else { return }
         var next = document
-        next.updateArtboard(id) { $0.height = target }
+        next.resizeArtboard(id, height: target)
         document = next
         persist()
+    }
+
+    /// 改画板尺寸（周围的画板自动让开，保持原来的间距）
+    func resizeArtboard(_ id: UUID, width: Double? = nil, height: Double? = nil) {
+        guard isEditable else { return }
+        commit { $0.resizeArtboard(id, width: width, height: height) }
     }
 
     func moveArtboard(_ id: UUID, to origin: CGPoint) {

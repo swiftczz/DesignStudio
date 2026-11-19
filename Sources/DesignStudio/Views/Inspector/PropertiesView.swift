@@ -31,8 +31,8 @@ private struct ArtboardProperties: View {
             Section("画板") {
                 CommitField("名称", value: board.name) { session.renameArtboard(board.id, to: $0) }
                 PairRow {
-                    NumberField("W", value: board.width) { v in session.updateArtboard(board.id) { $0.width = max(v, 20) } }
-                    NumberField("H", value: board.height) { v in session.updateArtboard(board.id) { $0.height = max(v, 20) } }
+                    NumberField("W", value: board.width) { v in session.resizeArtboard(board.id, width: max(v, 20)) }
+                    NumberField("H", value: board.height) { v in session.resizeArtboard(board.id, height: max(v, 20)) }
                 }
                 PairRow {
                     NumberField("X", value: board.x) { v in session.updateArtboard(board.id) { $0.x = v } }
@@ -41,7 +41,7 @@ private struct ArtboardProperties: View {
                 Menu("常用尺寸") {
                     ForEach(Self.presets, id: \.0) { name, size in
                         Button("\(name)  \(Int(size.width))×\(Int(size.height))") {
-                            session.updateArtboard(board.id) { $0.width = size.width; $0.height = size.height }
+                            session.resizeArtboard(board.id, width: size.width, height: size.height)
                         }
                     }
                 }
