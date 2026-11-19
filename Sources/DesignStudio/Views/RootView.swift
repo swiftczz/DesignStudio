@@ -58,27 +58,37 @@ struct SidebarView: View {
     @State private var renamingID: UUID?
     @State private var renameText = ""
     @State private var deletingID: UUID?
+    @FocusState private var sidebarFocused: Bool
 
     var body: some View {
-        List(selection: selection) {
-            Section {
-                Label { Text("新建设计") } icon: {
-                    SidebarIcon(systemName: "plus.bubble")
+        let projects = app.sortedProjects
+        ScrollViewReader { scroll in
+            List {
+                Section {
+                    sidebarRow(.home) {
+                        Label {
+                            Text("新建设计").fontWeight(app.route == .home ? .semibold : .regular)
+                        } icon: {
+                            Image(systemName: "plus.bubble").foregroundStyle(Theme.accent)
+                        }
+                    }
+                    sidebarRow(.designSystems) {
+                        Label {
+                            Text("设计系统").fontWeight(app.route == .designSystems ? .semibold : .regular)
+                        } icon: {
+                            Image(systemName: "paintpalette").foregroundStyle(Theme.accent)
+                        }
+                    }
                 }
-                .tag(SidebarRoute.home)
-                Label { Text("设计系统") } icon: {
-                    SidebarIcon(systemName: "paintpalette")
-                }
-                .tag(SidebarRoute.designSystems)
-            }
 
-            Section("项目") {
-                if app.projects.isEmpty {
-                    Text("还没有项目").foregroundStyle(.secondary)
-                }
-                ForEach(app.sortedProjects) { project in
-                    ProjectRow(project: project)
-                        .tag(SidebarRoute.project(project.id))
+                Section("项目") {
+                    if projects.isEmpty {
+                        Text("还没有项目").foregroundStyle(.secondary)
+                    }
+                    ForEach(projects) { project in
+                        sidebarRow(.project(project.id)) {
+                            ProjectRow(project: project)
+                        }
                         .contextMenu {
                             Button("重命名…") {
                                 renameText = project.displayName
@@ -90,10 +100,26 @@ struct SidebarView: View {
                             Divider()
                             Button("删除", role: .destructive) { deletingID = project.id }
                         }
+                    }
                 }
             }
+            .listStyle(.sidebar)
+            .focusable()
+            .focusEffectDisabled()
+            .focused($sidebarFocused)
+            .onKeyPress(keys: [.upArrow, .downArrow]) { press in
+                guard sidebarFocused else { return .ignored }
+                let routes: [SidebarRoute] = [.home, .designSystems] + projects.map { .project($0.id) }
+                guard let index = routes.firstIndex(of: app.route) else { return .ignored }
+                let next = index + (press.key == .upArrow ? -1 : 1)
+                if routes.indices.contains(next) {
+                    let route = routes[next]
+                    app.route = route
+                    scroll.scrollTo(route)
+                }
+                return .handled
+            }
         }
-        .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) {
             SidebarFooter()
         }
@@ -115,21 +141,25 @@ struct SidebarView: View {
         }
     }
 
-    private var selection: Binding<SidebarRoute?> {
-        Binding(
-            get: { app.route },
-            set: { if let v = $0 { app.route = v } }
+    private func sidebarRow<Content: View>(_ route: SidebarRoute, @ViewBuilder content: () -> Content) -> some View {
+        let selected = app.route == route
+        return Button {
+            sidebarFocused = true
+            app.route = route
+        } label: {
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .listRowBackground(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(selected ? Color(nsColor: .unemphasizedSelectedContentBackgroundColor) : .clear)
+                .padding(.horizontal, 10)
+                .allowsHitTesting(false)
         )
-    }
-}
-
-private struct SidebarIcon: View {
-    @Environment(\.backgroundProminence) private var backgroundProminence
-    let systemName: String
-
-    var body: some View {
-        Image(systemName: systemName)
-            .foregroundStyle(backgroundProminence == .increased ? Color.white : Theme.accent)
+        .id(route)
     }
 }
 
@@ -139,10 +169,12 @@ private struct ProjectRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            SidebarIcon(systemName: project.kind.symbol)
+            Image(systemName: project.kind.symbol)
+                .foregroundStyle(Theme.accent)
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 1) {
                 Text(project.displayName)
+                    .fontWeight(app.route == .project(project.id) ? .semibold : .regular)
                     .lineLimit(1)
                     .help(project.displayName)
                 Text(project.updatedAt, format: .relative(presentation: .named))
