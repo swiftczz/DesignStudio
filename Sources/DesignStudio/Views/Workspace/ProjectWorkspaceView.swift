@@ -228,46 +228,37 @@ struct ExportMenu: View {
 
     var body: some View {
         Menu {
-            if let board = session.exportArtboard, let project = session.project {
-                // 导出的 HTML 都合并了画布共用样式，单独打开也完整
-                let boards = session.currentPage?.composedArtboards ?? []
-                let boardHTML = session.document.composedHTML(board.id) ?? board.html
-                Section("当前画板「\(board.name)」") {
-                    Button("导出 HTML…", systemImage: "doc.richtext") {
-                        ExportService.exportHTML(boardHTML, name: "\(project.name)-\(board.name)")
-                    }
-                    Button("导出 PNG…", systemImage: "photo") {
-                        Task { ExportService.exportPNG(await session.snapshot(board), name: "\(project.name)-\(board.name)") }
-                    }
-                    Button("导出 PDF…", systemImage: "doc") {
-                        Task {
-                            do { ExportService.exportPDF(try await session.pdf(board), name: "\(project.name)-\(board.name)") }
-                            catch { ExportService.presentError("导出 PDF 失败", error) }
-                        }
-                    }
-                    Button("在浏览器中打开", systemImage: "safari") {
-                        ExportService.openInBrowser(boardHTML, name: "\(project.name)-\(board.name)")
-                    }
-                    Button("拷贝 HTML", systemImage: "doc.on.doc") { ExportService.copyHTML(boardHTML) }
-                }
+            if let project = session.project, let page = session.currentPage, !page.artboards.isEmpty {
+                // 工具栏的导出针对整个画布；单个画板在画板标题栏右侧导出。导出的 HTML 都合并了画布共用样式
+                let boards = page.composedArtboards
+                let name = session.document.pages.count > 1 ? "\(project.name)-\(page.displayName)" : project.name
                 Section("当前画布（\(boards.count) 个画板）") {
                     Button("导出为一个 HTML 文件…", systemImage: "doc.richtext") {
-                        let name = boards.count > 1 || session.document.pages.count > 1
-                            ? "\(project.name)-\(session.currentPage?.displayName ?? "画布")" : project.name
                         ExportService.exportCanvasHTML(boards, kind: session.kind, name: name)
                     }
                     Button("在浏览器中打开整个画布", systemImage: "safari") {
-                        ExportService.openInBrowser(CanvasBundle.make(title: project.name, artboards: boards, kind: session.kind),
-                                                    name: "\(project.name)-画布")
+                        ExportService.openInBrowser(CanvasBundle.make(title: name, artboards: boards, kind: session.kind),
+                                                    name: name)
+                    }
+                    Button("导出 ZIP（HTML + PNG）…", systemImage: "doc.zipper") {
+                        let bundle = CanvasBundle.make(title: name, artboards: boards, kind: session.kind)
+                        Task {
+                            var files: [(name: String, html: String, png: Data?)] = []
+                            for b in boards {
+                                let png = await session.snapshot(b).flatMap { ImageUtil.pngData($0) }
+                                files.append((b.name, b.html, png))
+                            }
+                            ExportService.exportCanvasZip(name: name, bundle: bundle, sharedCSS: page.sharedCSS, boards: files)
+                        }
                     }
                     Button("导出全部 HTML…", systemImage: "folder") {
-                        ExportService.exportAllHTML(boards, projectName: project.name)
+                        ExportService.exportAllHTML(boards, projectName: name)
                     }
                     Button("导出为一个 PDF（每个画板一页）…", systemImage: "doc.on.doc") {
                         Task {
                             var pages: [Data] = []
                             for b in boards { if let d = try? await session.pdf(b) { pages.append(d) } }
-                            ExportService.exportMergedPDF(pages, name: project.name)
+                            ExportService.exportMergedPDF(pages, name: name)
                         }
                     }
                 }
@@ -284,7 +275,7 @@ struct ExportMenu: View {
         } label: {
             Label("导出", systemImage: "square.and.arrow.up")
         }
-        .help("导出与交接")
+        .help("导出整个画布与交接")
     }
 }
 

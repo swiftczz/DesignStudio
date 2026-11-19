@@ -545,16 +545,68 @@ final class ProjectSession {
             || NSImage.canInit(with: .general) || NSPasteboard.general.string(forType: .string) != nil
     }
 
+    // MARK: 元素图片 / SVG / HTML（拷贝和导出共用）
+
+    /// 元素（或整个画板）的截图，2 倍分辨率
+    func elementImage(artboardID: UUID, elementID: Int?) async -> NSImage? {
+        let h = handle(for: artboardID)
+        var rect: CGRect?
+        if let id = elementID {
+            rect = await h.decode(ElementRect.self, "return window.__ds.rect(id)", ["id": id])?.cgRect
+            guard rect != nil else { return nil }
+        }
+        return await h.snapshot(cssRect: rect, scale: 2)
+    }
+
+    /// 样式展开后的元素放进 foreignObject 的 SVG，可以粘贴到 Figma 等工具
+    func elementSVG(artboardID: UUID, elementID: Int) async -> String? {
+        let h = handle(for: artboardID)
+        guard let html = await h.call("return window.__ds.inlined(id)", ["id": elementID]),
+              let rect = await h.decode(ElementRect.self, "return window.__ds.rect(id)", ["id": elementID]) else { return nil }
+        let w = Int(rect.w.rounded(.up)), hgt = Int(rect.h.rounded(.up))
+        return """
+        <svg xmlns="http://www.w3.org/2000/svg" width="\(w)" height="\(hgt)" viewBox="0 0 \(w) \(hgt)">
+          <foreignObject x="0" y="0" width="\(w)" height="\(hgt)">
+            <div xmlns="http://www.w3.org/1999/xhtml">
+        \(html)
+            </div>
+          </foreignObject>
+        </svg>
+        """
+    }
+
+    /// 样式展开后的元素代码（片段）
+    func elementHTML(artboardID: UUID, elementID: Int) async -> String? {
+        await handle(for: artboardID).call("return window.__ds.inlined(id)", ["id": elementID])
+    }
+
+    /// 元素导出成可以直接打开的 HTML 文件：样式已展开，并保留画板引用的字体等外部样式表
+    func elementDocument(artboardID: UUID, elementID: Int, title: String) async -> String? {
+        guard let fragment = await elementHTML(artboardID: artboardID, elementID: elementID) else { return nil }
+        let source = document.artboard(artboardID)?.html ?? ""
+        let links = source.matches(of: /(?i)<link\b[^>]*rel\s*=\s*["']?(?:stylesheet|preconnect)[^>]*>/)
+            .map { String($0.output) }.joined(separator: "\n")
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>\(title.htmlEscaped)</title>
+        \(links)
+        </head>
+        <body style="margin:0">
+        \(fragment)
+        </body>
+        </html>
+        """
+    }
+
     /// 拷贝为 PNG：选中元素（或整个画板）的截图，2 倍分辨率
     func copySelectionAsPNG() {
         guard let sel = selection else { return }
         Task {
-            let h = handle(for: sel.artboardID)
-            var rect: CGRect?
-            if let id = sel.elementID {
-                rect = await h.decode(ElementRect.self, "return window.__ds.rect(id)", ["id": id])?.cgRect
-            }
-            guard let image = await h.snapshot(cssRect: rect, scale: 2) else { return }
+            guard let image = await elementImage(artboardID: sel.artboardID, elementID: sel.elementID) else { return }
             let pb = NSPasteboard.general
             pb.clearContents()
             pb.writeObjects([image])
@@ -565,19 +617,7 @@ final class ProjectSession {
     func copySelectionAsSVG() {
         guard let (board, id) = selectedElement else { return }
         Task {
-            let h = handle(for: board)
-            guard let html = await h.call("return window.__ds.inlined(id)", ["id": id]),
-                  let rect = await h.decode(ElementRect.self, "return window.__ds.rect(id)", ["id": id]) else { return }
-            let w = Int(rect.w.rounded(.up)), hgt = Int(rect.h.rounded(.up))
-            let svg = """
-            <svg xmlns="http://www.w3.org/2000/svg" width="\(w)" height="\(hgt)" viewBox="0 0 \(w) \(hgt)">
-              <foreignObject x="0" y="0" width="\(w)" height="\(hgt)">
-                <div xmlns="http://www.w3.org/1999/xhtml">
-            \(html)
-                </div>
-              </foreignObject>
-            </svg>
-            """
+            guard let svg = await elementSVG(artboardID: board, elementID: id) else { return }
             let pb = NSPasteboard.general
             pb.clearContents()
             pb.setString(svg, forType: .string)
@@ -591,7 +631,7 @@ final class ProjectSession {
         Task {
             let text: String?
             if let id = sel.elementID {
-                text = await handle(for: sel.artboardID).call("return window.__ds.inlined(id)", ["id": id])
+                text = await elementHTML(artboardID: sel.artboardID, elementID: id)
             } else {
                 text = document.composedHTML(sel.artboardID)
             }

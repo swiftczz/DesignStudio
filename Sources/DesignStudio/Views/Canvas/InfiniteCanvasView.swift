@@ -317,6 +317,7 @@ private struct ArtboardFrame: View {
             }
             Spacer(minLength: 0)
             if session.zoom * artboard.width > 220 {
+                ArtboardExportMenu(artboard: artboard, session: session)
                 Menu {
                     Button("全屏查看此画板", systemImage: "arrow.up.left.and.arrow.down.right") {
                         session.select(CanvasSelection(artboardID: artboard.id, elementID: nil))

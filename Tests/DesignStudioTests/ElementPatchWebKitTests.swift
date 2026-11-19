@@ -354,3 +354,31 @@ struct SharedStylesTests {
         #expect(result as? [String] == ["rgb(1, 2, 3)", "rgb(9, 8, 7)", "clean", "shown"])
     }
 }
+
+struct ZipExportTests {
+    @Test func zipsFolderWithUTF8Names() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "ds-zip-test-" + UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appending(path: "out.zip")
+        let page = String(repeating: "<p>共用样式 shared</p>\n", count: 200)
+        try ExportService.makeZip(name: "Weft/首页", at: url) { folder in
+            try page.write(to: folder.appending(path: "首页.html"), atomically: true, encoding: .utf8)
+            let sub = folder.appending(path: "png", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+            try Data([1, 2, 3]).write(to: sub.appending(path: "01-首页.png"))
+        }
+        // 用系统 unzip 解出来核对文件名和内容
+        let out = dir.appending(path: "x", directoryHint: .isDirectory)
+        let unzip = Process()
+        unzip.executableURL = URL(filePath: "/usr/bin/unzip")
+        unzip.arguments = ["-q", url.path, "-d", out.path]
+        try unzip.run()
+        unzip.waitUntilExit()
+        #expect(unzip.terminationStatus == 0)
+        let html = try String(contentsOf: out.appending(path: "Weft-首页/首页.html"), encoding: .utf8)
+        #expect(html == page)
+        #expect(try Data(contentsOf: out.appending(path: "Weft-首页/png/01-首页.png")) == Data([1, 2, 3]))
+        #expect(try Data(contentsOf: url).count < page.utf8.count)   // 确实压缩了
+    }
+}

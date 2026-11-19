@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 @MainActor
 enum ExportService {
-    static func safeFileName(_ name: String) -> String {
+    nonisolated static func safeFileName(_ name: String) -> String {
         let cleaned = name.replacingOccurrences(of: "[/:\\\\?%*|\"<>…]", with: "-", options: .regularExpression).trimmed
         return cleaned.isEmpty ? "design" : cleaned
     }
@@ -60,6 +60,75 @@ enum ExportService {
         } catch {
             presentError("导出失败", error)
         }
+    }
+
+    /// 单个画板打包成 ZIP：独立 HTML（含共用样式）、PNG、PDF
+    static func exportArtboardZip(name: String, html: String, png: Data?, pdf: Data?) {
+        writeZip(name: name) { folder in
+            let base = safeFileName(name)
+            try html.write(to: folder.appending(path: base + ".html"), atomically: true, encoding: .utf8)
+            if let png { try png.write(to: folder.appending(path: base + ".png")) }
+            if let pdf { try pdf.write(to: folder.appending(path: base + ".pdf")) }
+        }
+    }
+
+    static func exportSVG(_ svg: String, name: String) {
+        guard let url = savePanel(name: name, type: .svg) else { return }
+        do { try svg.write(to: url, atomically: true, encoding: .utf8) } catch { presentError("导出 SVG 失败", error) }
+    }
+
+    /// 选中元素打包成 ZIP：HTML、PNG、SVG
+    static func exportElementZip(name: String, html: String?, png: Data?, svg: String?) {
+        writeZip(name: name) { folder in
+            let base = safeFileName(name)
+            if let html { try html.write(to: folder.appending(path: base + ".html"), atomically: true, encoding: .utf8) }
+            if let png { try png.write(to: folder.appending(path: base + ".png")) }
+            if let svg { try svg.write(to: folder.appending(path: base + ".svg"), atomically: true, encoding: .utf8) }
+        }
+    }
+
+    /// 整个画布打包成 ZIP：index.html（一个文件看全部画板）、共用样式、每个画板的独立 HTML 和 PNG
+    static func exportCanvasZip(name: String, bundle: String, sharedCSS: String?,
+                                boards: [(name: String, html: String, png: Data?)]) {
+        writeZip(name: name) { folder in
+            try bundle.write(to: folder.appending(path: "index.html"), atomically: true, encoding: .utf8)
+            if let css = sharedCSS?.trimmed, !css.isEmpty {
+                try css.write(to: folder.appending(path: "shared.css"), atomically: true, encoding: .utf8)
+            }
+            let html = folder.appending(path: "html", directoryHint: .isDirectory)
+            let png = folder.appending(path: "png", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: html, withIntermediateDirectories: true)
+            for (i, b) in boards.enumerated() {
+                let file = String(format: "%02d-", i + 1) + safeFileName(b.name)
+                try b.html.write(to: html.appending(path: file + ".html"), atomically: true, encoding: .utf8)
+                if let data = b.png {
+                    try FileManager.default.createDirectory(at: png, withIntermediateDirectories: true)
+                    try data.write(to: png.appending(path: file + ".png"))
+                }
+            }
+        }
+    }
+
+    /// 选好保存位置后，组装文件夹并压缩成 .zip
+    private static func writeZip(name: String, build: (URL) throws -> Void) {
+        guard let url = savePanel(name: name, type: .zip) else { return }
+        do {
+            try makeZip(name: name, at: url, build: build)
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } catch {
+            presentError("导出 ZIP 失败", error)
+        }
+    }
+
+    /// 在临时目录里组装以 name 命名的文件夹，压缩后放到 url（已存在则替换）
+    nonisolated static func makeZip(name: String, at url: URL, build: (URL) throws -> Void) throws {
+        let work = FileManager.default.temporaryDirectory.appending(path: "DesignStudio-Zip-" + UUID().uuidString,
+                                                                     directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: work) }
+        let folder = work.appending(path: safeFileName(name), directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try build(folder)
+        try ZipWriter.zip(folder: folder).write(to: url, options: .atomic)
     }
 
     /// 把一组画板分别导出为 HTML 文件，放进选定目录下的新文件夹
