@@ -53,7 +53,6 @@ struct HomeView: View {
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("导入项目", systemImage: "square.and.arrow.down", action: app.chooseProjectToImport)
         }
     }
 
@@ -98,7 +97,7 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text("最近的项目").font(.headline)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 18)], spacing: 18) {
-                    ForEach(app.sortedProjects.prefix(12)) { project in
+                    ForEach(app.sortedProjects.prefix(4)) { project in
                         ProjectCard(project: project)
                     }
                 }
