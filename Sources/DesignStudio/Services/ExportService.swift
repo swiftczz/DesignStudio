@@ -110,25 +110,33 @@ enum ExportService {
         }
     }
 
-    /// 整个画布打包成 ZIP：index.html（一个文件看全部画板）、共用样式、每个画板的独立 HTML 和 PNG
+    /// 整个画布打包成 ZIP：index.html（一个文件看全部画板）、共用样式、每个画板的独立 HTML、PNG 和 PDF
     static func exportCanvasZip(name: String, bundle: String, sharedCSS: String?,
-                                boards: [(name: String, html: String, png: Data?)]) {
+                                boards: [(name: String, html: String, png: Data?, pdf: Data)]) {
         writeZip(name: name) { folder in
-            try bundle.write(to: folder.appending(path: "index.html"), atomically: true, encoding: .utf8)
-            if let css = sharedCSS?.trimmed, !css.isEmpty {
-                try css.write(to: folder.appending(path: "shared.css"), atomically: true, encoding: .utf8)
+            try writeCanvasZipContents(to: folder, bundle: bundle, sharedCSS: sharedCSS, boards: boards)
+        }
+    }
+
+    nonisolated static func writeCanvasZipContents(to folder: URL, bundle: String, sharedCSS: String?,
+                                                   boards: [(name: String, html: String, png: Data?, pdf: Data)]) throws {
+        try bundle.write(to: folder.appending(path: "index.html"), atomically: true, encoding: .utf8)
+        if let css = sharedCSS?.trimmed, !css.isEmpty {
+            try css.write(to: folder.appending(path: "shared.css"), atomically: true, encoding: .utf8)
+        }
+        let html = folder.appending(path: "html", directoryHint: .isDirectory)
+        let png = folder.appending(path: "png", directoryHint: .isDirectory)
+        let pdf = folder.appending(path: "pdf", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: html, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: pdf, withIntermediateDirectories: true)
+        for (index, board) in boards.enumerated() {
+            let file = String(format: "%02d-", index + 1) + safeFileName(board.name)
+            try board.html.write(to: html.appending(path: file + ".html"), atomically: true, encoding: .utf8)
+            if let data = board.png {
+                try FileManager.default.createDirectory(at: png, withIntermediateDirectories: true)
+                try data.write(to: png.appending(path: file + ".png"))
             }
-            let html = folder.appending(path: "html", directoryHint: .isDirectory)
-            let png = folder.appending(path: "png", directoryHint: .isDirectory)
-            try FileManager.default.createDirectory(at: html, withIntermediateDirectories: true)
-            for (i, b) in boards.enumerated() {
-                let file = String(format: "%02d-", i + 1) + safeFileName(b.name)
-                try b.html.write(to: html.appending(path: file + ".html"), atomically: true, encoding: .utf8)
-                if let data = b.png {
-                    try FileManager.default.createDirectory(at: png, withIntermediateDirectories: true)
-                    try data.write(to: png.appending(path: file + ".png"))
-                }
-            }
+            try board.pdf.write(to: pdf.appending(path: file + ".pdf"))
         }
     }
 

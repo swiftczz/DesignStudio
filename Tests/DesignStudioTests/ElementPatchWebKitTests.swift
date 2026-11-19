@@ -361,17 +361,21 @@ struct SharedStylesTests {
 }
 
 struct ZipExportTests {
-    @Test func zipsFolderWithUTF8Names() throws {
+    @Test func zipsCanvasWithUTF8NamesAndPDFForEachArtboard() throws {
         let dir = FileManager.default.temporaryDirectory.appending(path: "ds-zip-test-" + UUID().uuidString, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appending(path: "out.zip")
         let page = String(repeating: "<p>共用样式 shared</p>\n", count: 200)
+        let css = "body { margin: 0; }"
+        let firstPNG = Data([1, 2, 3])
+        let firstPDF = Data("first PDF".utf8)
+        let secondPDF = Data("second PDF".utf8)
         try ExportService.makeZip(name: "Weft/首页", at: url) { folder in
-            try page.write(to: folder.appending(path: "首页.html"), atomically: true, encoding: .utf8)
-            let sub = folder.appending(path: "png", directoryHint: .isDirectory)
-            try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
-            try Data([1, 2, 3]).write(to: sub.appending(path: "01-首页.png"))
+            try ExportService.writeCanvasZipContents(to: folder, bundle: page, sharedCSS: css, boards: [
+                ("首页", "<p>首页</p>", firstPNG, firstPDF),
+                ("书架", "<p>书架</p>", nil, secondPDF),
+            ])
         }
         // 用系统 unzip 解出来核对文件名和内容
         let out = dir.appending(path: "x", directoryHint: .isDirectory)
@@ -381,9 +385,14 @@ struct ZipExportTests {
         try unzip.run()
         unzip.waitUntilExit()
         #expect(unzip.terminationStatus == 0)
-        let html = try String(contentsOf: out.appending(path: "Weft-首页/首页.html"), encoding: .utf8)
-        #expect(html == page)
-        #expect(try Data(contentsOf: out.appending(path: "Weft-首页/png/01-首页.png")) == Data([1, 2, 3]))
+        let root = out.appending(path: "Weft-首页", directoryHint: .isDirectory)
+        #expect(try String(contentsOf: root.appending(path: "index.html"), encoding: .utf8) == page)
+        #expect(try String(contentsOf: root.appending(path: "shared.css"), encoding: .utf8) == css)
+        #expect(try String(contentsOf: root.appending(path: "html/01-首页.html"), encoding: .utf8) == "<p>首页</p>")
+        #expect(try String(contentsOf: root.appending(path: "html/02-书架.html"), encoding: .utf8) == "<p>书架</p>")
+        #expect(try Data(contentsOf: root.appending(path: "png/01-首页.png")) == firstPNG)
+        #expect(try Data(contentsOf: root.appending(path: "pdf/01-首页.pdf")) == firstPDF)
+        #expect(try Data(contentsOf: root.appending(path: "pdf/02-书架.pdf")) == secondPDF)
         #expect(try Data(contentsOf: url).count < page.utf8.count)   // 确实压缩了
     }
 }

@@ -239,37 +239,42 @@ struct ExportMenu: View {
                 let boards = page.composedArtboards
                 let name = session.document.pages.count > 1 ? "\(project.name)-\(page.displayName)" : project.name
                 Section("当前画布（\(boards.count) 个画板）") {
-                    Button("导出为一个 HTML 文件…", systemImage: "doc.richtext") {
+                    Button("导出一个 HTML", systemImage: "doc.richtext") {
                         ExportService.exportCanvasHTML(boards, kind: session.kind, name: name)
                     }
-                    Button("在浏览器中打开整个画布", systemImage: "safari") {
-                        ExportService.openInBrowser(CanvasBundle.make(title: name, artboards: boards, kind: session.kind),
-                                                    name: name)
-                    }
-                    Button("导出 ZIP（HTML + PNG）…", systemImage: "doc.zipper") {
-                        let bundle = CanvasBundle.make(title: name, artboards: boards, kind: session.kind)
-                        Task {
-                            var files: [(name: String, html: String, png: Data?)] = []
-                            for b in boards {
-                                let png = await session.snapshot(b).flatMap { ImageUtil.pngData($0) }
-                                files.append((b.name, b.html, png))
-                            }
-                            ExportService.exportCanvasZip(name: name, bundle: bundle, sharedCSS: page.sharedCSS, boards: files)
-                        }
-                    }
-                    Button("导出全部 HTML…", systemImage: "folder") {
+                    Button("导出分开的 HTML", systemImage: "folder") {
                         ExportService.exportAllHTML(boards, projectName: name)
                     }
-                    Button("导出为一个 PDF（每个画板一页）…", systemImage: "doc.on.doc") {
+                    Button("导出一个 PDF", systemImage: "doc.on.doc") {
                         Task {
                             var pages: [Data] = []
                             for b in boards { if let d = try? await session.pdf(b) { pages.append(d) } }
                             ExportService.exportMergedPDF(pages, name: name)
                         }
                     }
+                    Button("导出 ZIP（HTML + PNG + PDF）", systemImage: "doc.zipper") {
+                        let bundle = CanvasBundle.make(title: name, artboards: boards, kind: session.kind)
+                        Task {
+                            do {
+                                var files: [(name: String, html: String, png: Data?, pdf: Data)] = []
+                                for board in boards {
+                                    let pdf = try await session.pdf(board)
+                                    let png = await session.snapshot(board).flatMap { ImageUtil.pngData($0) }
+                                    files.append((board.name, board.html, png, pdf))
+                                }
+                                ExportService.exportCanvasZip(name: name, bundle: bundle, sharedCSS: page.sharedCSS, boards: files)
+                            } catch {
+                                ExportService.presentError("导出 ZIP 失败", error)
+                            }
+                        }
+                    }
+                    Button("在浏览器中打开整个画布", systemImage: "safari") {
+                        ExportService.openInBrowser(CanvasBundle.make(title: name, artboards: boards, kind: session.kind),
+                                                    name: name)
+                    }
                 }
                 Divider()
-                Button("交给 Claude Code 实现…", systemImage: "hammer") {
+                Button("交给 Claude Code 实现", systemImage: "hammer") {
                     let exe = app.providers.first(where: { $0.kind == .claudeCode })?.cliExecutable ?? "claude"
                     ExportService.handoffToClaudeCode(project: project, artboards: session.document.composedArtboards,
                                                       designSystem: app.designSystem(for: project.designSystemID),
