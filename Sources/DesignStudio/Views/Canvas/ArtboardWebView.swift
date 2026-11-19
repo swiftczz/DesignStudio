@@ -72,6 +72,7 @@ final class CanvasWebView: WKWebView {
 /// 编辑画板始终以原始尺寸排版。外层 frame 随画布缩放，bounds 和网页视口保持原始尺寸。
 final class ArtboardViewport: NSView {
     let webView: CanvasWebView
+    private var artboardSize: CGSize
     var capturesPointer = false
 
     override var isFlipped: Bool { true }
@@ -82,6 +83,7 @@ final class ArtboardViewport: NSView {
 
     init(webView: CanvasWebView, artboardSize: CGSize) {
         self.webView = webView
+        self.artboardSize = artboardSize
         super.init(frame: CGRect(origin: .zero, size: artboardSize))
         clipsToBounds = true
         webView.autoresizingMask = []
@@ -93,14 +95,24 @@ final class ArtboardViewport: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func setArtboardSize(_ size: CGSize) {
+        artboardSize = size
+        restoreLayoutBounds()
         let rect = CGRect(origin: .zero, size: size)
-        if bounds != rect { bounds = rect }
         if webView.frame != rect { webView.frame = rect }
     }
 
+    override var frame: NSRect {
+        didSet { restoreLayoutBounds() }
+    }
+
     override func setFrameSize(_ newSize: NSSize) {
-        let layoutBounds = bounds
         super.setFrameSize(newSize)
+        restoreLayoutBounds()
+    }
+
+    private func restoreLayoutBounds() {
+        // SwiftUI can assign the whole frame on first layout, which resets AppKit's bounds.
+        let layoutBounds = CGRect(origin: .zero, size: artboardSize)
         if bounds != layoutBounds { bounds = layoutBounds }
     }
 }

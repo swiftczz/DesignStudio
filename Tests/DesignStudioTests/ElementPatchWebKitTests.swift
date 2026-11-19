@@ -78,6 +78,11 @@ struct ElementPatchWebKitTests {
         let window = NSWindow(contentRect: CGRect(origin: .zero, size: CGSize(width: 1000, height: 800)),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView?.addSubview(viewport)
+        // SwiftUI sets the full frame on initial layout, before the WebView has loaded.
+        viewport.frame = CGRect(x: 30, y: 40, width: 300, height: 225)
+        let initialSize = web.convert(layoutSize, to: window.contentView)
+        #expect(abs(initialSize.width - 300) < 0.001)
+        #expect(abs(initialSize.height - 225) < 0.001)
         window.orderBack(nil)
         defer { window.orderOut(nil) }
         let navigation = NavigationWaiter()
