@@ -21,6 +21,7 @@ struct DesignStudioApp: App {
             RootView()
                 .environment(app)
                 .frame(minWidth: 1080, minHeight: 680)
+                .onOpenURL { app.importProject(from: $0) }
                 .onAppear { app.softwareUpdater.start(legacyAutomaticChecks: app.settings.automaticallyChecksForUpdates) }
                 .task { await app.auth.refreshAll(profiles: app.providers) }
         }
@@ -76,6 +77,8 @@ struct AppCommands: Commands {
         CommandGroup(replacing: .newItem) {
             Button("新建设计") { app.route = .home }
                 .keyboardShortcut("n")
+            Button("导入 DesignStudio 项目…", action: app.chooseProjectToImport)
+                .keyboardShortcut("o")
         }
         // 撤销 / 重做：文本输入框里沿用系统撤销，其余情况撤销画布上的修改
         CommandGroup(replacing: .undoRedo) {

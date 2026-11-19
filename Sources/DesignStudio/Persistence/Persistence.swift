@@ -74,6 +74,23 @@ final class PersistenceController {
         }
     }
 
+    /// Commit a new project before adding it to the sidebar. Roll back if its design system cannot be saved.
+    func saveImportedProject(_ project: Project, designSystems: [DesignSystem]?) throws {
+        let data = try encoder.encode(project)
+        let dir = projectDirectory(project.id)
+        let fm = FileManager.default
+        try fm.createDirectory(at: dir, withIntermediateDirectories: false)
+        do {
+            try data.write(to: dir.appending(path: "project.json"), options: .atomic)
+            if let designSystems {
+                try encoder.encode(designSystems).write(to: root.appending(path: "design-systems.json"), options: .atomic)
+            }
+        } catch {
+            try? fm.removeItem(at: dir)
+            throw error
+        }
+    }
+
     func deleteProject(_ id: UUID) {
         let dir = projectDirectory(id)
         do {

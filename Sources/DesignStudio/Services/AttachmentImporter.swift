@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 enum AttachmentImporter {
     private static let markdownExtensions = ["md", "markdown"]
     // 直接粘贴的路径可独占一行，或后接本轮需求。路径中的空格和中文文件名可保留。
-    private static let pathPattern = try? NSRegularExpression(
+    nonisolated private static let pathPattern = try? NSRegularExpression(
         pattern: #"^[\t ]*["'`]?((?:file://|~/|/)[^"\r\n'`]+?\.(?:markdown|md|txt))(?=$|[\s"'`，。；：、,:;])"#,
         options: [.anchorsMatchLines, .caseInsensitive]
     )
@@ -102,12 +102,11 @@ enum AttachmentImporter {
     }
 
     static func includingPastedDocuments(in text: String, attachments: [ChatAttachment]) throws -> [ChatAttachment] {
-        guard let pathPattern else { return attachments }
         var result = attachments
         var imported = Set(attachments.compactMap(\.sourcePath))
-        for match in pathPattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-            guard let range = Range(match.range(at: 1), in: text), let url = fileURL(for: String(text[range])),
-                  imported.insert(url.standardizedFileURL.path).inserted else { continue }
+        for reference in pastedDocumentReferences(in: text) {
+            let url = reference.url
+            guard imported.insert(url.standardizedFileURL.path).inserted else { continue }
             let attachment = try file(from: url)
             guard attachment.documentText != nil else {
                 throw ImportError(message: "无法将「\(url.lastPathComponent)」读作文本。请用回形针添加原文件。")
@@ -117,7 +116,17 @@ enum AttachmentImporter {
         return result
     }
 
-    private static func fileURL(for path: String) -> URL? {
+    nonisolated static func pastedDocumentReferences(in text: String) -> [(range: Range<String.Index>, url: URL)] {
+        guard let pathPattern else { return [] }
+        return pathPattern.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
+            guard let range = Range(match.range(at: 1), in: text), let url = fileURL(for: String(text[range])) else {
+                return nil
+            }
+            return (range, url)
+        }
+    }
+
+    nonisolated private static func fileURL(for path: String) -> URL? {
         if path.lowercased().hasPrefix("file://") {
             guard let url = URL(string: path), url.isFileURL,
                   [nil, "", "localhost"].contains(url.host?.lowercased()) else { return nil }

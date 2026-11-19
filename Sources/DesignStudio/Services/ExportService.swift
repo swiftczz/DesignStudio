@@ -22,6 +22,33 @@ enum ExportService {
         try? html.write(to: url, atomically: true, encoding: .utf8)
     }
 
+    static func exportProject(_ project: Project, designSystem: DesignSystem?) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [ProjectArchive.contentType]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = safeFileName(project.displayName) + "." + ProjectArchive.filenameExtension
+        panel.prompt = "导出"
+        let includeHistory = NSButton(checkboxWithTitle: "同时包含对话、参考附件、批注和版本历史",
+                                      target: nil, action: nil)
+        includeHistory.sizeToFit()
+        panel.accessoryView = includeHistory
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let archive = ProjectArchive(project: project, designSystem: designSystem, includingHistory: includeHistory.state == .on)
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    let accessed = url.startAccessingSecurityScopedResource()
+                    defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+                    try archive.write(to: url)
+                }.value
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            } catch {
+                presentError("导出项目失败", error)
+            }
+        }
+    }
+
     static func exportPDF(_ data: Data, name: String) {
         guard let url = savePanel(name: name, type: .pdf) else { return }
         do { try data.write(to: url) } catch { presentError("导出 PDF 失败", error) }

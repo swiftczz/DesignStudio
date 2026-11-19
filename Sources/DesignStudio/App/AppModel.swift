@@ -115,6 +115,41 @@ final class AppModel {
         }
     }
 
+    func exportProject(_ id: UUID) {
+        guard let project = project(id) else { return }
+        ExportService.exportProject(project, designSystem: designSystem(for: project.designSystemID))
+    }
+
+    func chooseProjectToImport() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [ProjectArchive.contentType]
+        panel.canChooseDirectories = false
+        panel.prompt = "导入"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        importProject(from: url)
+    }
+
+    func importProject(from url: URL) {
+        guard url.isFileURL, url.pathExtension.lowercased() == ProjectArchive.filenameExtension else { return }
+        Task {
+            do {
+                let archive = try await Task.detached(priority: .userInitiated) {
+                    let accessed = url.startAccessingSecurityScopedResource()
+                    defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+                    return try ProjectArchive.read(from: url)
+                }.value
+                let imported = archive.importedCopy(existingDesignSystems: designSystems)
+                let systems = imported.newDesignSystem.map { designSystems + [$0] }
+                try persistence.saveImportedProject(imported.project, designSystems: systems)
+                if let systems { designSystems = systems }
+                projects.append(imported.project)
+                route = .project(imported.project.id)
+            } catch {
+                ExportService.presentError("无法导入项目", error)
+            }
+        }
+    }
+
     func regenerateTitle(_ id: UUID) async {
         guard let project = project(id), regeneratingTitles.insert(id).inserted else { return }
         defer { regeneratingTitles.remove(id) }

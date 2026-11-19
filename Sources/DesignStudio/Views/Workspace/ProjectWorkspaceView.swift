@@ -228,6 +228,12 @@ struct ExportMenu: View {
 
     var body: some View {
         Menu {
+            if let project = session.project {
+                Button("导出可编辑项目（.designstudio）…", systemImage: "doc.zipper") {
+                    app.exportProject(project.id)
+                }
+                Divider()
+            }
             if let project = session.project, let page = session.currentPage, !page.artboards.isEmpty {
                 // 工具栏的导出针对整个画布；单个画板在画板标题栏右侧导出。导出的 HTML 都合并了画布共用样式
                 let boards = page.composedArtboards

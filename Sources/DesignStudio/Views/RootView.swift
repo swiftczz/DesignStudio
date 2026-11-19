@@ -75,6 +75,7 @@ struct SidebarView: View {
                             }
                             RegenerateProjectTitleButton(projectID: project.id)
                             Button("创建副本") { app.duplicate(project.id) }
+                            Button("导出可编辑项目…") { app.exportProject(project.id) }
                             Divider()
                             Button("删除", role: .destructive) { deletingID = project.id }
                         }
