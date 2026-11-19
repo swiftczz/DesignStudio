@@ -72,8 +72,13 @@ final class CanvasWebView: WKWebView {
 /// 编辑画板始终以原始尺寸排版。外层 frame 随画布缩放，bounds 和网页视口保持原始尺寸。
 final class ArtboardViewport: NSView {
     let webView: CanvasWebView
+    var capturesPointer = false
 
     override var isFlipped: Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        capturesPointer ? nil : super.hitTest(point)
+    }
 
     init(webView: CanvasWebView, artboardSize: CGSize) {
         self.webView = webView
@@ -195,6 +200,7 @@ struct ArtboardWebView: NSViewRepresentable {
         web.allowsBackForwardNavigationGestures = false
         web.underPageBackgroundColor = .white
         let viewport = ArtboardViewport(webView: web, artboardSize: artboard.frame.size)
+        viewport.capturesPointer = session.tool.capturesPointer && !session.interactivePreview
         context.coordinator.handle.webView = web
         context.coordinator.handle.mode = mode
         context.coordinator.load(artboard.html, in: web)
@@ -208,6 +214,7 @@ struct ArtboardWebView: NSViewRepresentable {
 
     func updateNSView(_ viewport: ArtboardViewport, context: Context) {
         viewport.setArtboardSize(artboard.frame.size)
+        viewport.capturesPointer = session.tool.capturesPointer && !session.interactivePreview
         let web = viewport.webView
         let c = context.coordinator
         c.session = session
@@ -304,6 +311,10 @@ struct ArtboardWebView: NSViewRepresentable {
             if msg.type == "ready" { initialize(); return }
             if msg.type == "contextMenu" { showContextMenu(msg, in: message.webView); return }
             session?.handleEditorMessage(msg, from: handle.artboardID)
+            if msg.type == "editing", let web = message.webView {
+                // 画板拦截默认的点击行为，进入行内编辑时把键盘焦点交还给网页。
+                web.window?.makeFirstResponder(web)
+            }
         }
     }
 }

@@ -24,6 +24,7 @@ final class ProjectSession {
 
     // MARK: 选中与编辑
     var tool: CanvasTool = .select
+    var pencilStroke = PencilStroke()
     var selection: CanvasSelection?
     var selectedProps: ElementProps?
     /// ⇧ 点击多选的元素（同一个画板里，2 个及以上时才有值）
@@ -671,17 +672,29 @@ final class ProjectSession {
     }
 
     /// 在画板中插入元素；point 为画板内的 CSS 坐标
-    func insertElement(_ html: String, in artboardID: UUID, at point: CGPoint?) {
+    func insertElement(_ html: String, in artboardID: UUID, at point: CGPoint?, keepsTool: Bool = false) {
         let args: [String: Any] = ["h": html, "x": point.map { Double($0.x) } ?? NSNull(), "y": point.map { Double($0.y) } ?? NSNull()]
+        let activeTool = tool
         Task {
             await edit("return window.__ds.insert(h, x, y)", args, artboardID: artboardID)
-            tool = .select
+            if !keepsTool && tool == activeTool { tool = .select }
         }
     }
 
     func insertText(in artboardID: UUID, at point: CGPoint) {
         let html = #"<p data-name="文本" style="margin:0;font-size:24px;line-height:1.4;color:#1f2328;white-space:nowrap">双击编辑文字</p>"#
         insertElement(html, in: artboardID, at: point)
+    }
+
+    func insertNote(in artboardID: UUID, at point: CGPoint) {
+        guard !streamingArtboardIDs.contains(artboardID) else { return }
+        let html = ##"<div data-name="便签" data-sticky-note="" style="box-sizing:border-box;width:150px;min-height:28px;padding:5px 8px;background:#FFF2A6;color:#49401E;font-family:system-ui,sans-serif;font-size:14px;line-height:1.35;white-space:pre-wrap;overflow-wrap:anywhere;box-shadow:0 2px 6px #0002"></div>"##
+        insertElement(html, in: artboardID, at: point)
+    }
+
+    func insertPencilStroke(_ style: PencilStroke, points: [CGPoint], in artboardID: UUID) {
+        guard let stroke = style.element(for: points) else { return }
+        insertElement(stroke.html, in: artboardID, at: stroke.origin, keepsTool: true)
     }
 
     func insertRectangle(in artboardID: UUID, rect: CGRect) {

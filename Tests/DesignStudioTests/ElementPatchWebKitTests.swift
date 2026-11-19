@@ -5,6 +5,42 @@ import WebKit
 @testable import DesignStudio
 
 struct ElementPatchWebKitTests {
+    @MainActor @Test func insertsEditableNotesAndStyledPencilStrokes() async throws {
+        let html = HTMLAnnotator.annotate("<!doctype html><html><body></body></html>").html
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 300, height: 200))
+        let navigation = NavigationWaiter()
+        web.navigationDelegate = navigation
+        await withCheckedContinuation { continuation in
+            navigation.loaded = continuation
+            web.loadHTMLString(html, baseURL: nil)
+        }
+        _ = try await web.evaluateJavaScript(EditorScript.editor)
+        let style = PencilStroke(weight: .thick, pattern: .dashed)
+        let points = [CGPoint(x: 10, y: 25), CGPoint(x: 20, y: 12), CGPoint(x: 40, y: 35)]
+        let stroke = try #require(style.element(for: points))
+        #expect(stroke.origin == CGPoint(x: 7, y: 9))
+        #expect(style.element(for: [points[0]]) == nil)
+
+        let result = try await web.callAsyncJavaScript("""
+            window.__ds.init(source, 'select');
+            const note = JSON.parse(window.__ds.insert('<div data-sticky-note style="min-height:30px"></div>', 42, 50));
+            const el = document.querySelector('[data-sticky-note]');
+            const emptyHint = getComputedStyle(el, '::before').content.includes('双击编辑便签');
+            el.dispatchEvent(new MouseEvent('dblclick', {bubbles: true}));
+            const editable = el.isContentEditable;
+            el.innerText = '记下灵感';
+            el.blur();
+            const pencil = JSON.parse(window.__ds.insert(stroke, x, y));
+            const path = document.querySelector('[data-pencil-stroke] path');
+            return [note.props.kind === 'note', emptyHint, editable,
+                    pencil.source.includes('记下灵感'), !pencil.source.includes('双击编辑便签'),
+                    pencil.props.kind === 'pencil', path.getAttribute('stroke-width') === '4.00',
+                    path.getAttribute('stroke-dasharray') === '12.00 8.00',
+                    pencil.source.includes('data-pencil-stroke')];
+            """, arguments: ["source": html, "stroke": stroke.html, "x": stroke.origin.x, "y": stroke.origin.y], in: nil, contentWorld: .page)
+        #expect(result as? [Bool] == Array(repeating: true, count: 9))
+    }
+
     @MainActor @Test func appliesElementPatchInWebKit() async throws {
         let html = HTMLAnnotator.annotate("<button id='goal'>Old</button><div id='group'><span>Keep</span></div>").html
         let web = WKWebView()

@@ -13,6 +13,7 @@ struct TextFormatBar: View {
     private var isBold: Bool { (Int(weight) ?? 400) >= 600 }
     private var isItalic: Bool { props.css("font-style") == "italic" }
     private var isUnderline: Bool { props.css("text-decoration-line").contains("underline") }
+    private var isNote: Bool { props.kind == "note" }
 
     static let sizes: [Double] = [10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 28, 32, 36, 40, 48, 56, 64, 72, 96]
     static let aligns: [(String, String, String)] = [("left", "左对齐", "text.alignleft"), ("center", "居中", "text.aligncenter"),
@@ -20,96 +21,124 @@ struct TextFormatBar: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            // 字体
-            Menu {
-                ForEach(CSSValue.fontChoices(including: family), id: \.self) { name in
-                    Toggle(name, isOn: Binding(get: { name == family },
-                                               set: { _ in session.setStyle("font-family", CSSValue.familyStack(name)) }))
+            if isNote {
+                sizeMenu
+
+                ColorSwatchButton(hex: color, title: "文字颜色") { session.setStyle("color", $0) }
+                toggle("bold", on: isBold, help: "粗体") { session.setStyle("font-weight", isBold ? "400" : "700") }
+                toggle("italic", on: isItalic, help: "斜体") { session.setStyle("font-style", isItalic ? "" : "italic") }
+                divider
+                ColorSwatchButton(hex: CSSValue.hex(props.css("background-color"))?.hex ?? "#FFF2A6", title: "便签底色") {
+                    session.setStyle("background-color", $0)
                 }
-            } label: {
-                chip {
-                    Image(systemName: "textformat.size").font(.system(size: 11, weight: .medium))
-                    Text(family).lineLimit(1).frame(maxWidth: 110, alignment: .leading)
-                }
+                divider
+                commentButton
+            } else {
+                textControls
             }
-            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-            .help("字体")
-
-            // 字号
-            Menu {
-                ForEach(sizeChoices, id: \.self) { v in
-                    Toggle(CSSValue.px(v), isOn: Binding(get: { abs(v - size) < 0.01 },
-                                                        set: { _ in session.setStyle("font-size", CSSValue.px(v)) }))
-                }
-            } label: {
-                chip { Text(CSSValue.format(size)).monospacedDigit() }
-            }
-            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-            .help("字号")
-
-            // 字重
-            Menu {
-                ForEach(CSSValue.weights, id: \.0) { w in
-                    Toggle(w.1, isOn: Binding(get: { w.0 == weight }, set: { _ in session.setStyle("font-weight", w.0) }))
-                }
-            } label: {
-                chip { Text(CSSValue.weights.first { $0.0 == weight }.map { String($0.1.prefix(2)) } ?? weight) }
-            }
-            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-            .help("字重")
-
-            divider
-
-            ColorSwatchButton(hex: color) { session.setStyle("color", $0) }
-
-            divider
-
-            toggle("bold", on: isBold, help: "粗体") { session.setStyle("font-weight", isBold ? "400" : "700") }
-            toggle("italic", on: isItalic, help: "斜体") { session.setStyle("font-style", isItalic ? "" : "italic") }
-            toggle("underline", on: isUnderline, help: "下划线") {
-                session.setStyle("text-decoration", isUnderline ? "none" : "underline")
-            }
-
-            // 对齐
-            Menu {
-                ForEach(Self.aligns, id: \.0) { a in
-                    Toggle(isOn: Binding(get: { a.0 == align }, set: { _ in session.setStyle("text-align", a.0) })) {
-                        Label(a.1, systemImage: a.2)
-                    }
-                }
-            } label: {
-                icon(Self.aligns.first { $0.0 == align }?.2 ?? "text.alignleft")
-            }
-            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-            .help("对齐")
-
-            divider
-
-            Button { session.showAskAI = true } label: { icon("sparkle") }
-                .buttonStyle(.plain)
-                .disabled(!session.canAskAboutSelection)
-                .help("询问 AI（⌘J）")
-            Button {
-                if let sel = session.selection { session.pendingComment = (sel.artboardID, props) }
-            } label: { icon("bubble.left") }
-                .buttonStyle(.plain)
-                .help("添加批注")
-
-            Menu {
-                Button("复制一份") { session.duplicateSelection() }
-                Button("拷贝为 PNG") { session.copySelectionAsPNG() }
-                Button("拷贝属性") { session.copyProperties() }
-                Button("粘贴属性") { session.pasteProperties() }.disabled(session.copiedStyle == nil)
-                Divider()
-                Button("删除", role: .destructive) { session.deleteSelection() }
-            } label: { icon("ellipsis") }
-                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-                .help("更多")
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 5)
         .glassEffect(.regular, in: .capsule)
         .fixedSize()
+    }
+
+    @ViewBuilder private var textControls: some View {
+        // 字体
+        Menu {
+            ForEach(CSSValue.fontChoices(including: family), id: \.self) { name in
+                Toggle(name, isOn: Binding(get: { name == family },
+                                           set: { _ in session.setStyle("font-family", CSSValue.familyStack(name)) }))
+            }
+        } label: {
+            chip {
+                Image(systemName: "textformat.size").font(.system(size: 11, weight: .medium))
+                Text(family).lineLimit(1).frame(maxWidth: 110, alignment: .leading)
+            }
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .help("字体")
+
+        sizeMenu
+
+        // 字重
+        Menu {
+            ForEach(CSSValue.weights, id: \.0) { w in
+                Toggle(w.1, isOn: Binding(get: { w.0 == weight }, set: { _ in session.setStyle("font-weight", w.0) }))
+            }
+        } label: {
+            chip { Text(CSSValue.weights.first { $0.0 == weight }.map { String($0.1.prefix(2)) } ?? weight) }
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .help("字重")
+
+        divider
+
+        ColorSwatchButton(hex: color) { session.setStyle("color", $0) }
+
+        divider
+
+        toggle("bold", on: isBold, help: "粗体") { session.setStyle("font-weight", isBold ? "400" : "700") }
+        toggle("italic", on: isItalic, help: "斜体") { session.setStyle("font-style", isItalic ? "" : "italic") }
+        toggle("underline", on: isUnderline, help: "下划线") {
+            session.setStyle("text-decoration", isUnderline ? "none" : "underline")
+        }
+
+        // 对齐
+        Menu {
+            ForEach(Self.aligns, id: \.0) { a in
+                Toggle(isOn: Binding(get: { a.0 == align }, set: { _ in session.setStyle("text-align", a.0) })) {
+                    Label(a.1, systemImage: a.2)
+                }
+            }
+        } label: {
+            icon(Self.aligns.first { $0.0 == align }?.2 ?? "text.alignleft")
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .help("对齐")
+
+        divider
+
+        Button { session.showAskAI = true } label: { icon("sparkle") }
+            .buttonStyle(.plain)
+            .disabled(!session.canAskAboutSelection)
+            .help("询问 AI（⌘J）")
+        commentButton
+
+        Menu {
+            Button("复制一份") { session.duplicateSelection() }
+            Button("拷贝为 PNG") { session.copySelectionAsPNG() }
+            Button("拷贝属性") { session.copyProperties() }
+            Button("粘贴属性") { session.pasteProperties() }.disabled(session.copiedStyle == nil)
+            Divider()
+            Button("删除", role: .destructive) { session.deleteSelection() }
+        } label: { icon("ellipsis") }
+            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+            .help("更多")
+    }
+
+    private var commentButton: some View {
+        Button {
+            if let sel = session.selection { session.pendingComment = (sel.artboardID, props) }
+        } label: { icon("bubble.left") }
+            .buttonStyle(.plain)
+            .help("添加批注")
+    }
+
+    private var sizeMenu: some View {
+        Menu {
+            ForEach(sizeChoices, id: \.self) { v in
+                Toggle(CSSValue.px(v), isOn: Binding(get: { abs(v - size) < 0.01 },
+                                                    set: { _ in session.setStyle("font-size", CSSValue.px(v)) }))
+            }
+        } label: {
+            chip {
+                if isNote { Image(systemName: "textformat.size") }
+                Text(CSSValue.format(size)).monospacedDigit()
+            }
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .help("字号")
     }
 
     private var sizeChoices: [Double] {
@@ -160,6 +189,7 @@ private struct HoverChip<Content: View>: View {
 /// 颜色按钮：当前颜色的色块，点开选常用色或打开系统取色器
 private struct ColorSwatchButton: View {
     let hex: String
+    var title = "颜色"
     let apply: (String) -> Void
     @State private var showing = false
 
@@ -173,7 +203,7 @@ private struct ColorSwatchButton: View {
             }
         }
         .buttonStyle(.plain)
-        .help("颜色 \(hex)")
+        .help("\(title) \(hex)")
         .popover(isPresented: $showing, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 10) {
                 LazyVGrid(columns: Array(repeating: GridItem(.fixed(22), spacing: 8), count: 7), spacing: 8) {

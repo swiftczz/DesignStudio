@@ -29,6 +29,8 @@ nonisolated enum EditorScript {
       var drag = null;               // 按下后可能开始的拖动：move（绝对定位）/ offset（⌥ 自由移动）/ reorder（流式布局里调整顺序）
       var trackedIds = [], geometryFrame = null, lastGeometry = null;
 
+      function isStickyNote(el){ return el.hasAttribute('data-sticky-note'); }
+
       function post(m){ try { window.webkit.messageHandlers.ds.postMessage(JSON.stringify(m)); } catch(_){} }
       function live(id){ return id == null ? null : document.querySelector('[' + ATTR + '="' + id + '"]'); }
       function srcEl(id){ return (src && id != null) ? src.querySelector('[' + ATTR + '="' + id + '"]') : null; }
@@ -255,6 +257,7 @@ nonisolated enum EditorScript {
 
       var INLINE = ['br','b','strong','i','em','span','small','sup','sub','code','mark','u','s','a','label'];
       function isTextLeaf(el){
+        if (el && isStickyNote(el)) return true;
         if (!el || !(el.textContent || '').trim()) return false;
         for (var i = 0; i < el.children.length; i++) {
           var c = el.children[i];
@@ -265,6 +268,8 @@ nonisolated enum EditorScript {
       function kindOf(el){
         var t = el.tagName.toLowerCase();
         if (isGroup(el)) return 'group';
+        if (isStickyNote(el)) return 'note';
+        if (el.hasAttribute('data-pencil-stroke')) return 'pencil';
         if (['img','svg','picture','canvas','video'].indexOf(t) >= 0) return 'image';
         if (t === 'button' || el.getAttribute('role') === 'button') return 'button';
         if (['input','textarea','select'].indexOf(t) >= 0) return 'input';
@@ -386,6 +391,7 @@ nonisolated enum EditorScript {
       }
 
       function setMode(m){
+        if (m !== 'select' && editing) finishEditing();
         mode = m;
         document.documentElement.classList.toggle('__ds-editing', m !== 'off');
         if (m === 'off') { hoverId = null; }
@@ -394,7 +400,8 @@ nonisolated enum EditorScript {
       var css = document.createElement('style');
       css.id = '__ds-editor-style';
       css.textContent = 'html.__ds-editing, html.__ds-editing *{cursor:default!important;-webkit-user-select:none!important;user-select:none!important}'
-        + 'html.__ds-editing [contenteditable]{cursor:text!important;-webkit-user-select:text!important;user-select:text!important;outline:none}';
+        + 'html.__ds-editing [contenteditable]{cursor:text!important;-webkit-user-select:text!important;user-select:text!important;outline:none}'
+        + 'html.__ds-editing [data-sticky-note]:empty:not([contenteditable])::before{content:"双击编辑便签";opacity:.5}';
       document.documentElement.appendChild(css);
       setMode('select');
 
@@ -436,6 +443,8 @@ nonisolated enum EditorScript {
           if (!drag.started) {
             if (Math.abs(dx) + Math.abs(dy) < 4) return;
             drag.started = true;
+            // 普通点击保留原始目标，以便 WebKit 把双击交给文字或便签。
+            try { document.documentElement.setPointerCapture(e.pointerId); } catch(_) {}
             if (drag.selectOnStart) { selectedId = drag.id; post({ type: 'select', props: props(drag.id) }); }
             if (drag.kind === 'offset' && window.getComputedStyle(drag.el).position === 'static') drag.el.style.position = 'relative';
             if (drag.kind === 'reorder') {
@@ -526,7 +535,6 @@ nonisolated enum EditorScript {
         drag = { id: dragId, clickId: id, el: el, kind: kind, x0: e.clientX, y0: e.clientY, started: false,
                  selectOnStart: dragId !== selectedId,
                  l0: parseFloat(absolute ? cs.left : el.style.left) || 0, t0: parseFloat(absolute ? cs.top : el.style.top) || 0 };
-        try { document.documentElement.setPointerCapture(e.pointerId); } catch(_) {}
       }, true);
       document.addEventListener('pointerup', function(e){
         if (!block(e)) return;
@@ -595,6 +603,7 @@ nonisolated enum EditorScript {
         var id = +el.getAttribute(ATTR);
         var s = srcEl(id);
         var text = el.innerText.replace(/\n+$/, '');
+        if (isStickyNote(el)) el.textContent = text;
         if (s && s.textContent !== text) {
           s.textContent = text; el.textContent = text;
           post({ type: 'changed', result: JSON.parse(result(id, true)) });

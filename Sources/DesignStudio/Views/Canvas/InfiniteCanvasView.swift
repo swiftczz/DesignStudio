@@ -46,7 +46,7 @@ struct InfiniteCanvasView: View {
                         .zIndex(Double(artboardDrag.isMoving(board.id) ? 1 : 0))
                 }
 
-                if !session.interactivePreview {
+                if !session.interactivePreview && session.tool != .pencil {
                     SelectionLayer(session: session, drag: artboardDrag)
                         .allowsHitTesting(false)
                         .zIndex(2)
@@ -57,8 +57,14 @@ struct InfiniteCanvasView: View {
                     .zIndex(3)
 
                 if session.tool.capturesPointer && session.isEditable && !session.interactivePreview {
-                    ToolCaptureLayer(session: session)
-                        .zIndex(4)
+                    Group {
+                        if session.tool == .pencil {
+                            PencilCaptureLayer(session: session)
+                        } else {
+                            ToolCaptureLayer(session: session)
+                        }
+                    }
+                    .zIndex(4)
                 }
 
                 // 选中文字时，元素上方出现格式工具栏
@@ -96,7 +102,11 @@ struct InfiniteCanvasView: View {
         .focusEffectDisabled()
         .focused($focused)
         .onChange(of: focused) { _, now in session.canvasFocused = now }
+        .onChange(of: session.tool) { _, tool in
+            if tool == .note || tool == .pencil { focused = true }
+        }
         .onKeyPress(phases: .down) { press in
+            guard !session.isEditingText else { return .ignored }
             let key: String = switch press.key {
             case .delete: "backspace"
             case .deleteForward: "delete"
@@ -516,7 +526,7 @@ private struct ToolCaptureLayer: View {
         switch session.tool {
         case .frame:
             if dragged { session.addArtboard(frame: worldRect) } else { session.addArtboard(at: ws) }
-        case .text, .rectangle, .image:
+        case .text, .note, .rectangle, .image:
             guard let board = session.currentPage?.artboards.last(where: { $0.frame.contains(ws) }) else {
                 NSSound.beep()
                 return
@@ -524,6 +534,7 @@ private struct ToolCaptureLayer: View {
             let local = CGPoint(x: ws.x - board.x, y: ws.y - board.y)
             switch session.tool {
             case .text: session.insertText(in: board.id, at: local)
+            case .note: session.insertNote(in: board.id, at: local)
             case .image: session.insertImage(in: board.id, at: local)
             default:
                 let kind = session.shapeKind
@@ -537,6 +548,72 @@ private struct ToolCaptureLayer: View {
         default:
             break
         }
+    }
+}
+
+private struct PencilCaptureLayer: View {
+    let session: ProjectSession
+    @GestureState private var dragging = false
+    @State private var stroke: Stroke?
+
+    private struct Stroke {
+        var board: Artboard
+        var style: PencilStroke
+        var points: [CGPoint]
+
+        func localPoint(_ worldPoint: CGPoint) -> CGPoint {
+            CGPoint(x: min(max(worldPoint.x - board.x, 0), board.width),
+                    y: min(max(worldPoint.y - board.y, 0), board.height))
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            Color.clear
+            if let stroke {
+                let boardRect = session.viewRect(stroke.board.frame)
+                let scale = session.zoom
+                Canvas { context, _ in
+                    context.clip(to: Path(boardRect))
+                    let path = Path { path in
+                        path.addLines(stroke.points.map {
+                            CGPoint(x: boardRect.minX + $0.x * scale, y: boardRect.minY + $0.y * scale)
+                        })
+                    }
+                    context.stroke(path, with: .color(Color(hex: PencilStroke.color)),
+                                   style: StrokeStyle(lineWidth: stroke.style.width * scale, lineCap: .round,
+                                                      lineJoin: .round, dash: stroke.style.dash.map { $0 * scale }))
+                }
+                .allowsHitTesting(false)
+            }
+        }
+        .contentShape(.rect)
+        .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named(CanvasCoordinateSpace.viewport))
+            .updating($dragging) { _, active, _ in active = true }
+            .onChanged { value in
+                if stroke == nil {
+                    let start = session.worldPoint(value.startLocation)
+                    guard let board = session.currentPage?.artboards.last(where: { $0.frame.contains(start) }),
+                          !session.streamingArtboardIDs.contains(board.id) else { return }
+                    let point = CGPoint(x: start.x - board.x, y: start.y - board.y)
+                    stroke = Stroke(board: board, style: session.pencilStroke, points: [point])
+                    session.userMovedViewport()
+                }
+                appendPoint(at: value.location)
+            }
+            .onEnded { value in
+                defer { stroke = nil }
+                appendPoint(at: value.location)
+                guard let stroke, session.currentPage?.artboards.contains(where: { $0.id == stroke.board.id }) == true else { return }
+                session.insertPencilStroke(stroke.style, points: stroke.points, in: stroke.board.id)
+            })
+        .onChange(of: dragging) { _, active in if !active { stroke = nil } }
+        .pointerStyle(.rectSelection)
+    }
+
+    private func appendPoint(at position: CGPoint) {
+        guard let point = stroke?.localPoint(session.worldPoint(position)), stroke?.points.last != point else { return }
+        stroke?.points.append(point)
     }
 }
 

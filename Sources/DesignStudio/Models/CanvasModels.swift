@@ -33,7 +33,7 @@ nonisolated enum ShapeKind: String, CaseIterable, Identifiable, Sendable {
 }
 
 nonisolated enum CanvasTool: String, CaseIterable, Identifiable, Sendable {
-    case select, hand, frame, text, rectangle, image, comment
+    case select, hand, frame, text, note, pencil, rectangle, image, comment
 
     var id: String { rawValue }
 
@@ -43,6 +43,8 @@ nonisolated enum CanvasTool: String, CaseIterable, Identifiable, Sendable {
         case .hand: "抓手"
         case .frame: "画板"
         case .text: "文本"
+        case .note: "便签"
+        case .pencil: "铅笔"
         case .rectangle: "形状"
         case .image: "图片"
         case .comment: "批注"
@@ -55,6 +57,8 @@ nonisolated enum CanvasTool: String, CaseIterable, Identifiable, Sendable {
         case .hand: "hand.raised"
         case .frame: "number"
         case .text: "textformat"
+        case .note: "note"
+        case .pencil: "pencil"
         case .rectangle: "square"
         case .image: "photo"
         case .comment: "bubble.left"
@@ -68,6 +72,8 @@ nonisolated enum CanvasTool: String, CaseIterable, Identifiable, Sendable {
         case .hand: "h"
         case .frame: "f"
         case .text: "t"
+        case .note: "n"
+        case .pencil: "p"
         case .rectangle: "r"
         case .image: "i"
         case .comment: "c"
@@ -80,6 +86,8 @@ nonisolated enum CanvasTool: String, CaseIterable, Identifiable, Sendable {
         case .hand: "抓手（H）：拖动平移画布"
         case .frame: "画板（F）：点击或拖出一个新画板"
         case .text: "文本（T）：在画板上点击添加文字"
+        case .note: "便签（N）：在画板上点击放置，双击编辑"
+        case .pencil: "铅笔（P）：在画板上拖动绘制自由线条"
         case .rectangle: "形状（R）：在画板上拖出矩形、圆形、箭头或直线"
         case .image: "图片（I）：在画板上点击插入本地图片"
         case .comment: "批注（C）：点击元素留下修改意见，交给 AI 处理"
@@ -209,6 +217,8 @@ nonisolated enum ElementKind {
     static func title(_ kind: String) -> String {
         switch kind {
         case "text": "文本"
+        case "note": "便签"
+        case "pencil": "铅笔线条"
         case "button": "按钮"
         case "image": "图片"
         case "input": "输入框"
@@ -224,6 +234,8 @@ nonisolated enum ElementKind {
     static func symbol(_ kind: String) -> String {
         switch kind {
         case "text": "text.alignleft"
+        case "note": "note"
+        case "pencil": "pencil"
         case "button": "capsule"
         case "image": "photo"
         case "input": "character.cursor.ibeam"
