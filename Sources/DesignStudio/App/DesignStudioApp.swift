@@ -77,7 +77,7 @@ struct AppCommands: Commands {
         CommandGroup(replacing: .newItem) {
             Button("新建设计") { app.route = .home }
                 .keyboardShortcut("n")
-            Button("导入 DesignStudio 项目…", action: app.chooseProjectToImport)
+            Button("导入项目", action: app.chooseProjectToImport)
                 .keyboardShortcut("o")
         }
         // 撤销 / 重做：文本输入框里沿用系统撤销，其余情况撤销画布上的修改

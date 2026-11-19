@@ -53,7 +53,7 @@ struct HomeView: View {
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("导入项目…", systemImage: "square.and.arrow.down", action: app.chooseProjectToImport)
+            Button("导入项目", systemImage: "square.and.arrow.down", action: app.chooseProjectToImport)
         }
     }
 
@@ -154,7 +154,7 @@ struct ProjectCard: View {
         .contextMenu {
             RegenerateProjectTitleButton(projectID: project.id)
             Button("创建副本") { app.duplicate(project.id) }
-            Button("导出可编辑项目…") { app.exportProject(project.id) }
+            Button("导出项目") { app.exportProject(project.id) }
             Button("删除", role: .destructive) { app.deleteProject(project.id) }
         }
     }

@@ -3,6 +3,7 @@ import AppKit
 
 struct RootView: View {
     @Environment(AppModel.self) private var app
+    @State private var pendingExport: (project: Project, canvasIDs: Set<UUID>, includingHistory: Bool)?
     private let sidebarWidth: CGFloat = 285
 
     var body: some View {
@@ -16,6 +17,17 @@ struct RootView: View {
             detail
         }
         .tint(Theme.accent)
+        .sheet(item: $app.projectToExport, onDismiss: savePendingExport) { project in
+            ProjectExportOptions(project: project) { ids, includingHistory in
+                pendingExport = (project, ids, includingHistory)
+            }
+        }
+    }
+
+    private func savePendingExport() {
+        guard let pending = pendingExport else { return }
+        pendingExport = nil
+        app.saveProjectExport(pending.project, canvasIDs: pending.canvasIDs, includingHistory: pending.includingHistory)
     }
 
     /// 正在全屏查看画板的项目
@@ -75,7 +87,7 @@ struct SidebarView: View {
                             }
                             RegenerateProjectTitleButton(projectID: project.id)
                             Button("创建副本") { app.duplicate(project.id) }
-                            Button("导出可编辑项目…") { app.exportProject(project.id) }
+                            Button("导出项目") { app.exportProject(project.id) }
                             Divider()
                             Button("删除", role: .destructive) { deletingID = project.id }
                         }

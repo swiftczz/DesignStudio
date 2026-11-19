@@ -229,7 +229,7 @@ struct ExportMenu: View {
     var body: some View {
         Menu {
             if let project = session.project {
-                Button("导出可编辑项目（.designstudio）…", systemImage: "doc.zipper") {
+                Button("导出项目", systemImage: "doc.zipper") {
                     app.exportProject(project.id)
                 }
                 Divider()

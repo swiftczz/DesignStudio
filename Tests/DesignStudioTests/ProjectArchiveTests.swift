@@ -35,7 +35,8 @@ struct ProjectArchiveTests {
         project.model = "account-specific-model"
         project.effort = "high"
 
-        try ProjectArchive(project: project, designSystem: system, includingHistory: includingHistory).write(to: file)
+        try ProjectArchive(project: project, designSystem: system, includingHistory: includingHistory,
+                           canvasIDs: Set(document.pages.map(\.id))).write(to: file)
         let archive = try ProjectArchive.read(from: file)
         let imported = archive.importedCopy(existingDesignSystems: [])
         let copy = imported.project
@@ -64,10 +65,49 @@ struct ProjectArchiveTests {
         }
     }
 
-    @Test func resolvesDesignSystemCollisions() {
+    @Test func exportsSelectedCanvasesWithoutProjectWideHistory() throws {
+        let folder = try TempWorkspace.make(prefix: "project-archive")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appending(path: "所选画布.designstudio")
         let system = DesignSystem.blank()
-        let archive = ProjectArchive(project: Project(name: "t", kind: .prototype),
-                                     designSystem: system, includingHistory: false)
+        let board = Artboard(name: "首页", html: "<main>首页</main>", x: 42, y: 18, width: 390, height: 844)
+        let mobile = DesignPage(name: "移动端", artboards: [board], sharedCSS: "main { color: red; }")
+        let privateCanvas = DesignPage(name: "内部草稿", artboards: [
+            Artboard(name: "未公开", html: "<main>内部设计</main>", width: 390, height: 844)
+        ])
+        let desktop = DesignPage(name: "桌面端")
+        let document = DesignDocument(pages: [mobile, privateCanvas, desktop])
+        let version = DesignVersion(number: 1, document: document, summary: "整项目快照")
+        var project = Project(name: "设计交接", kind: .prototype)
+        project.document = document
+        project.messages = [ChatMessage(role: .assistant, text: "内部草稿", versionID: version.id)]
+        project.comments = [CanvasComment(selector: "main", tag: "main", snippet: "", note: "内部批注",
+                                          artboardName: "未公开")]
+        project.versions = [version]
+        project.currentVersionID = version.id
+
+        try ProjectArchive(project: project, designSystem: system, includingHistory: true,
+                           canvasIDs: [desktop.id, mobile.id]).write(to: file)
+        let archive = try ProjectArchive.read(from: file)
+        let copy = archive.importedCopy(existingDesignSystems: [])
+        #expect(copy.project.workingDocument.pages == [mobile, desktop])
+        #expect(copy.project.workingDocument.composedHTML(board.id)?.contains("color: red") == true)
+        #expect(copy.newDesignSystem == system)
+        #expect(copy.project.messages.isEmpty && copy.project.comments.isEmpty && copy.project.versions.isEmpty)
+        #expect(copy.project.currentVersionID == nil)
+
+        #expect(throws: ProjectArchive.ArchiveError.self) {
+            try ProjectArchive(project: project, designSystem: system, includingHistory: false, canvasIDs: [])
+        }
+        #expect(throws: ProjectArchive.ArchiveError.self) {
+            try ProjectArchive(project: project, designSystem: system, includingHistory: false, canvasIDs: [mobile.id, UUID()])
+        }
+    }
+
+    @Test func resolvesDesignSystemCollisions() throws {
+        let system = DesignSystem.blank()
+        let archive = try ProjectArchive(project: Project(name: "t", kind: .prototype),
+                                         designSystem: system, includingHistory: false)
         let matched = archive.importedCopy(existingDesignSystems: [system])
         #expect(matched.newDesignSystem == nil)
         #expect(matched.project.designSystemID == system.id)

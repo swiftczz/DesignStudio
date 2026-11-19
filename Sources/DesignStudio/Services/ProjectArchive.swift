@@ -17,16 +17,29 @@ nonisolated struct ProjectArchive: Codable, Sendable {
     let project: Project
     let designSystem: DesignSystem?
 
-    init(project: Project, designSystem: DesignSystem?, includingHistory: Bool) {
+    static func hasHistory(_ project: Project) -> Bool {
+        !project.messages.isEmpty || !project.comments.isEmpty || !project.versions.isEmpty
+    }
+
+    init(project: Project, designSystem: DesignSystem?, includingHistory: Bool,
+         canvasIDs: Set<UUID>? = nil) throws {
         var copy = project
+        let document = project.workingDocument
+        let pages = canvasIDs.map { ids in document.pages.filter { ids.contains($0.id) } } ?? document.pages
+        if let canvasIDs {
+            guard !pages.isEmpty, Set(pages.map(\.id)) == canvasIDs else {
+                throw ArchiveError.invalidSelection
+            }
+        }
         copy.name = project.displayName
         copy.titleNeedsSummary = false
-        copy.document = project.workingDocument
+        copy.document = DesignDocument(pages: pages)
         copy.designSystemID = designSystem?.id
         copy.providerID = nil
         copy.model = nil
         copy.effort = nil
-        if !includingHistory {
+        // History may contain entire snapshots and responses about canvases outside this selection.
+        if !includingHistory || pages.count != document.pages.count {
             copy.messages = []
             copy.versions = []
             copy.currentVersionID = nil
@@ -193,12 +206,14 @@ nonisolated struct ProjectArchive: Codable, Sendable {
 
     enum ArchiveError: LocalizedError {
         case invalid
+        case invalidSelection
         case tooLarge
         case unsupportedVersion(Int)
 
         var errorDescription: String? {
             switch self {
             case .invalid: "文件不是有效的 DesignStudio 项目，或文件已损坏。"
+            case .invalidSelection: "请选择至少一张有效的画布。"
             case .tooLarge: "项目数据超过 256 MB。可尝试关闭对话、批注和版本历史后再导出。"
             case .unsupportedVersion(let version): "此文件使用项目格式 v\(version)。请更新 DesignStudio 后再试。"
             }

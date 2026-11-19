@@ -20,6 +20,7 @@ final class AppModel {
     var designSystems: [DesignSystem] = []
     var providers: [ProviderProfile] = []
     var settings = AppSettings()
+    var projectToExport: Project?
     var route: SidebarRoute = .home {
         didSet {
             // 从主页 / 设计系统进入项目时收起项目边栏，只留对话栏和画布；离开项目回到这些页面时再展开。
@@ -116,15 +117,27 @@ final class AppModel {
     }
 
     func exportProject(_ id: UUID) {
-        guard let project = project(id) else { return }
-        ExportService.exportProject(project, designSystem: designSystem(for: project.designSystemID))
+        guard var project = project(id) else { return }
+        project.document = DesignDocument(pages: project.workingDocument.pages)
+        projectToExport = project
+    }
+
+    func saveProjectExport(_ project: Project, canvasIDs: Set<UUID>, includingHistory: Bool) {
+        do {
+            let archive = try ProjectArchive(project: project, designSystem: designSystem(for: project.designSystemID),
+                                             includingHistory: includingHistory, canvasIDs: canvasIDs)
+            ExportService.exportProject(archive)
+        } catch {
+            ExportService.presentError("导出项目失败", error)
+        }
     }
 
     func chooseProjectToImport() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [ProjectArchive.contentType]
         panel.canChooseDirectories = false
-        panel.prompt = "导入"
+        panel.title = "导入项目"
+        panel.prompt = "导入项目"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         importProject(from: url)
     }
