@@ -11,12 +11,34 @@ struct FloatingToolbar: View {
     private let toolWidth: CGFloat = 32
     private let toolHeight: CGFloat = 30
     private let toolSpacing: CGFloat = 3
-    private let snapAnimation = Animation.spring(response: 0.32, dampingFraction: 0.78)
+    private let horizontalInset: CGFloat = 8
+    private let optionsHeight: CGFloat = 40
+    private let optionsSpacing: CGFloat = 4
+    private let snapAnimation = Animation.spring(response: 0.42, dampingFraction: 0.76)
 
     var body: some View {
+        let optionsFrame = toolOptionsFrame
+        let optionsInset = optionsFrame == nil ? 0 : optionsHeight + optionsSpacing
+        mainToolbar(tooltipLift: optionsInset)
+            .padding(.top, optionsInset)
+            .overlay(alignment: .topLeading) {
+                // 选项栏有自己的布局区域，鼠标事件不会落到主工具条的滑动手势上。
+                if let optionsFrame, dragX == nil {
+                    GeometryReader { _ in
+                        toolOptions
+                            .fixedSize()
+                            .position(x: horizontalInset + optionsFrame.midX, y: optionsHeight / 2)
+                    }
+                    .frame(height: optionsHeight)
+                }
+            }
+            .disabled(!session.isEditable)
+    }
+
+    private func mainToolbar(tooltipLift: CGFloat) -> some View {
         GlassEffectContainer(spacing: 8) {
             HStack(spacing: toolSpacing) {
-                toolTray
+                toolTray(tooltipLift: tooltipLift)
                 divider
 
                 Button {
@@ -34,21 +56,36 @@ struct FloatingToolbar: View {
                 .foregroundStyle(session.showAskAI ? Theme.accent : .primary)
                 .help("让 AI 修改选中的画板或元素")
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, horizontalInset)
             .padding(.vertical, 6)
             .glassEffect(.regular, in: .capsule)
         }
-        .disabled(!session.isEditable)
     }
 
-    private var toolTray: some View {
+    private var toolOptionsFrame: CGRect? {
+        switch session.tool {
+        case .pencil: toolFrames[.pencil]
+        case .rectangle where session.showShapePicker: toolFrames[.rectangle]
+        default: nil
+        }
+    }
+
+    @ViewBuilder private var toolOptions: some View {
+        switch session.tool {
+        case .pencil: PencilStylePicker(style: $session.pencilStroke)
+        case .rectangle: ShapePicker(session: session)
+        default: EmptyView()
+        }
+    }
+
+    private func toolTray(tooltipLift: CGFloat) -> some View {
         let coordinates = toolCoordinates
         let highlighted = dragX.flatMap(nearestTool(to:)) ?? session.tool
         return HStack(spacing: toolSpacing) {
             ForEach(Array(groups.enumerated()), id: \.offset) { index, group in
                 if index > 0 { divider }
                 ForEach(group) { tool in
-                    toolButton(tool, highlighted: tool == highlighted)
+                    toolButton(tool, highlighted: tool == highlighted, tooltipLift: tooltipLift)
                         .onGeometryChange(for: CGRect.self) { geo in
                             geo.frame(in: .named(coordinates))
                         } action: { frame in
@@ -59,14 +96,16 @@ struct FloatingToolbar: View {
         }
         .background(alignment: .leading) {
             if let center = indicatorCenter {
+                let isDragging = dragX != nil
                 Capsule()
-                    .fill(.clear)
+                    .strokeBorder(.primary.opacity(0.12), lineWidth: 0.5)
                     .frame(width: toolWidth, height: toolHeight)
-                    .glassEffect(.regular.tint(Theme.accent.opacity(0.24)).interactive(), in: .capsule)
-                    .scaleEffect(dragX == nil ? 1 : 1.06)
-                    .animation(.snappy(duration: 0.18), value: dragX != nil)
+                    .glassEffect(.regular.interactive(), in: .capsule)
+                    .scaleEffect(x: isDragging ? 1.18 : 1, y: isDragging ? 1.08 : 1)
+                    .animation(isDragging ? .easeOut(duration: 0.16) : snapAnimation, value: isDragging)
                     .offset(x: center - toolWidth / 2)
-                    .animation(dragX == nil ? snapAnimation : nil, value: center)
+                    // 点击和松手时滑到目标；拖动期间直接跟随指针。
+                    .animation(isDragging ? nil : snapAnimation, value: center)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
@@ -115,7 +154,7 @@ struct FloatingToolbar: View {
         }
     }
 
-    private func toolButton(_ tool: CanvasTool, highlighted: Bool) -> some View {
+    private func toolButton(_ tool: CanvasTool, highlighted: Bool, tooltipLift: CGFloat) -> some View {
         let selected = session.tool == tool
         let isShape = tool == .rectangle
         return Button {
@@ -130,22 +169,8 @@ struct FloatingToolbar: View {
         .accessibilityLabel(tool.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .modifier(HoverName(text: isShape ? "\(session.shapeKind.title)  R" : "\(tool.title)  \(String(tool.shortcut).uppercased())",
-                            enabled: dragX == nil && !(isShape && session.showShapePicker) && !(selected && tool == .pencil)))
-        .overlay(alignment: .top) {
-            if dragX == nil && isShape && session.showShapePicker {
-                ShapePicker(session: session)
-                    .fixedSize()
-                    .offset(y: -50)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottom)))
-            }
-        }
-        .overlay(alignment: .top) {
-            if dragX == nil && selected && tool == .pencil {
-                PencilStylePicker(style: $session.pencilStroke)
-                    .fixedSize()
-                    .offset(y: -50)
-            }
-        }
+                            enabled: dragX == nil && !(isShape && session.showShapePicker) && !(selected && tool == .pencil),
+                            lift: tooltipLift))
     }
 }
 
@@ -340,6 +365,7 @@ private struct ShapePicker: View {
 struct HoverName: ViewModifier {
     let text: String
     var enabled = true
+    var lift: CGFloat = 0
     @State private var hovering = false
 
     func body(content: Content) -> some View {
@@ -356,7 +382,7 @@ struct HoverName: ViewModifier {
                         .padding(.vertical, 4)
                         .background(Color.black.opacity(0.78), in: .capsule)
                         .fixedSize()
-                        .offset(y: -36)
+                        .offset(y: -36 - lift)
                         .allowsHitTesting(false)
                         .transition(.opacity)
                 }
