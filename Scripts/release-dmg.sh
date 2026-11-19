@@ -21,7 +21,6 @@ APP_NAME="DesignStudio"
 APP="build/${APP_NAME}.app"
 
 VERSION="${1:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Support/Info.plist)}"
-BUILD_NUMBER="${BUILD_NUMBER:-${VERSION}}"
 DMG="dist/${APP_NAME}-${VERSION}.dmg"
 
 # ---------- 签名身份 ----------
@@ -42,7 +41,7 @@ else
 fi
 
 # ---------- 编译并打包 .app ----------
-SIGN_IDENTITY="${SIGN_IDENTITY}" VERSION="${VERSION}" BUILD_NUMBER="${BUILD_NUMBER}" \
+SIGN_IDENTITY="${SIGN_IDENTITY}" VERSION="${VERSION}" \
   ./Scripts/build-app.sh release
 
 echo "▶︎ 检查签名"

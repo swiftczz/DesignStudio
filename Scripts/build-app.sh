@@ -2,10 +2,10 @@
 # 把 SPM 可执行文件打包成适用于 Apple 芯片的 DesignStudio.app
 # 用法：./Scripts/build-app.sh [release|debug]
 #
-# 可选环境变量（发布脚本 release-dmg.sh 会设置，本地开发不用管）：
+# 可选环境变量（本地开发通常无需设置）：
 #   SIGN_IDENTITY="..."    签名身份；默认 "-"（ad-hoc）。给 Developer ID 时启用 Hardened Runtime 与时间戳
 #   VERSION="1.2.0"        写入 CFBundleShortVersionString
-#   BUILD_NUMBER="42"      写入 CFBundleVersion
+#   BUILD_NUMBER="42"      覆盖 Git 历史提交数，写入 CFBundleVersion
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -14,6 +14,12 @@ ARCH="arm64"
 APP_NAME="DesignStudio"
 APP="build/${APP_NAME}.app"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
+
+# 完整 Git 历史可用时，使用截至当前提交的累计提交数。
+if [ -z "${BUILD_NUMBER:-}" ] && [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = false ]; then
+  BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || true)"
+fi
+BUILD_NUMBER="${BUILD_NUMBER:-${VERSION:-}}"
 
 echo "▶︎ swift build -c ${CONFIG} --arch ${ARCH}"
 swift build -c "${CONFIG}" --arch "${ARCH}"
@@ -37,7 +43,6 @@ done < <(otool -l "${APP}/Contents/MacOS/${APP_NAME}" | sed -nE 's/^ +path (\/.*
 
 PLIST="${APP}/Contents/Info.plist"
 [ -n "${VERSION:-}" ] && /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "${PLIST}"
-BUILD_NUMBER="${BUILD_NUMBER:-${VERSION:-}}"
 [ -n "${BUILD_NUMBER}" ] && /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER}" "${PLIST}"
 
 # 如果存在 SPM 资源包也一并拷贝
