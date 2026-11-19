@@ -471,3 +471,54 @@ struct ArtboardReflowTests {
         #expect(noOverlaps(doc.pages[0]))
     }
 }
+
+struct FlowDragTests {
+    /// 在 WebKit 里模拟按下、移动、松开，返回 [h1 的 left, top, 第一个元素是否是 h1, 源码里的 h1 样式]
+    @MainActor func drag(dx: Double, dy: Double) async throws -> [String] {
+        let raw = """
+        <!DOCTYPE html><html><body style="margin:0">
+        <div class="box" style="padding:20px">
+          <p class="eyebrow" style="margin:0;height:20px">WORM</p>
+          <h1 id="title" style="margin:0;font-size:32px;height:40px">Recursion Protocol</h1>
+          <p class="by" style="margin:0;height:20px">by harborlight</p>
+        </div></body></html>
+        """
+        let html = HTMLAnnotator.annotate(raw).html
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 600, height: 400))
+        let navigation = ElementPatchWebKitTests.NavigationWaiter()
+        web.navigationDelegate = navigation
+        await withCheckedContinuation { continuation in
+            navigation.loaded = continuation
+            web.loadHTMLString(html, baseURL: nil)
+        }
+        _ = try await web.evaluateJavaScript(EditorScript.editor)
+        let result = try await web.callAsyncJavaScript("""
+            window.__ds.init(source, 'select');
+            let changed = null;
+            window.webkit = { messageHandlers: { ds: { postMessage: m => { const o = JSON.parse(m); if (o.type === 'changed') changed = o.result; } } } };
+            const h1 = document.getElementById('title');
+            const r = h1.getBoundingClientRect();
+            const x = r.left + 30, y = r.top + 10;
+            const fire = (type, cx, cy) => h1.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0, pointerId: 1 }));
+            fire('pointerdown', x, y);
+            for (let i = 1; i <= 5; i++) fire('pointermove', x + dx * i / 5, y + dy * i / 5);
+            fire('pointerup', x + dx, y + dy);
+            const first = document.querySelector('.box').firstElementChild;
+            return [h1.style.left, h1.style.top, String(first === h1), changed ? (changed.source.match(/<h1[^>]*>/) || [''])[0] : 'none'];
+            """, arguments: ["source": html, "dx": dx, "dy": dy], in: nil, contentWorld: .page)
+        return result as? [String] ?? []
+    }
+
+    @MainActor @Test func smallDragInFlowLayoutKeepsElementWhereDropped() async throws {
+        let r = try await drag(dx: 60, dy: 8)
+        #expect(r[0] == "60px" && r[1] == "8px")
+        #expect(r[2] == "false")                           // 没有换位
+        #expect(r[3].contains("left: 60px") && r[3].contains("top: 8px") && r[3].contains("position: relative"))
+    }
+
+    @MainActor @Test func dragPastSiblingStillReorders() async throws {
+        let r = try await drag(dx: 0, dy: -40)
+        #expect(r[2] == "true")                            // 移到了 WORM 前面
+        #expect(r[0] == "" && r[1] == "")                  // 没有留下偏移
+    }
+}

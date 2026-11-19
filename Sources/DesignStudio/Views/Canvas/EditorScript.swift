@@ -462,7 +462,7 @@ nonisolated enum EditorScript {
             }
           }
           if (drag.kind === 'reorder') {
-            reorderTo(drag.el, e.clientX, e.clientY);
+            if (reorderTo(drag.el, e.clientX, e.clientY)) drag.reordered = true;
             // 当前在布局里的位置（去掉临时位移），让元素保持在指针下方
             var rr = drag.el.getBoundingClientRect();
             var slotX = rr.left - drag.tx, slotY = rr.top - drag.ty;
@@ -548,6 +548,18 @@ nonisolated enum EditorScript {
         }
         var s = srcEl(d.id);
         if (!s) return;
+        if (d.kind === 'reorder' && !d.reordered) {
+          // 没有越过相邻元素换位：当作自由移动，元素留在松手的位置（相对定位偏移）
+          var st0 = d.el.style, sv0 = d.saved || {};
+          ['transform', 'opacity', 'zIndex', 'position', 'transition'].forEach(function(k){ st0[k] = sv0[k] || ''; });
+          if (window.getComputedStyle(d.el).position === 'static') st0.position = 'relative';
+          st0.left = Math.round(d.l0 + (d.tx || 0)) + 'px';
+          st0.top = Math.round(d.t0 + (d.ty || 0)) + 'px';
+          s.style.position = st0.position;
+          s.style.left = st0.left; s.style.top = st0.top;
+          post({ type: 'changed', result: JSON.parse(result(d.id, false)) });
+          return;
+        }
         if (d.kind === 'reorder') {
           var st = d.el.style, sv = d.saved || {};
           ['transform', 'opacity', 'zIndex', 'position', 'transition'].forEach(function(k){ st[k] = sv[k] || ''; });
