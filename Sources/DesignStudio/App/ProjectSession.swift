@@ -25,7 +25,12 @@ final class ProjectSession {
     // MARK: 选中与编辑
     var tool: CanvasTool = .select
     var pencilStroke = PencilStroke()
-    var selection: CanvasSelection?
+    var selection: CanvasSelection? {
+        didSet { if !settingArtboardSelection { selectedArtboardIDs = [] } }
+    }
+    /// 在画布空白处框选的画板（按画布顺序）。单击选中画板或元素时清空
+    private(set) var selectedArtboardIDs: [UUID] = []
+    @ObservationIgnored private var settingArtboardSelection = false
     var selectedProps: ElementProps?
     /// ⇧ 点击多选的元素（同一个画板里，2 个及以上时才有值）
     var multiSelection: [SelectedElement] = []
@@ -310,6 +315,17 @@ final class ProjectSession {
         }
     }
 
+    /// 框选画板：主选中为最后一个，其余一起高亮、一起移动和删除
+    func selectArtboards(_ ids: [UUID]) {
+        guard let primary = ids.last else { clearSelection(); return }
+        settingArtboardSelection = true
+        defer { settingArtboardSelection = false }
+        if selection != CanvasSelection(artboardID: primary, elementID: nil) {
+            select(CanvasSelection(artboardID: primary, elementID: nil))
+        }
+        selectedArtboardIDs = ids
+    }
+
     func clearSelection() {
         selection = nil
         selectedProps = nil
@@ -472,7 +488,9 @@ final class ProjectSession {
 
     func deleteSelection() {
         guard isEditable, let sel = selection else { return }
-        if multiSelection.count > 1 {
+        if selectedArtboardIDs.count > 1 {
+            deleteArtboards(selectedArtboardIDs)
+        } else if multiSelection.count > 1 {
             let ids = multiSelection.map(\.id)
             Task { await edit("return window.__ds.removeMany(ids)", ["ids": ids], artboardID: sel.artboardID) }
         } else if let id = sel.elementID {
@@ -856,6 +874,27 @@ final class ProjectSession {
             a.x = origin.x
             a.y = origin.y
         }
+    }
+
+    /// 一起移动多个画板（一次撤销）
+    func moveArtboards(_ origins: [UUID: CGPoint]) {
+        guard isEditable, !origins.isEmpty else { return }
+        commit { doc in
+            for (id, origin) in origins {
+                doc.updateArtboard(id) { a in
+                    a.x = origin.x
+                    a.y = origin.y
+                }
+            }
+        }
+    }
+
+    /// 一起删除多个画板（一次撤销）
+    func deleteArtboards(_ ids: [UUID]) {
+        guard isEditable, !ids.isEmpty else { return }
+        commit { doc in for id in ids { doc.removeArtboard(id) } }
+        for id in ids { handles[id] = nil; trees[id] = nil }
+        clearSelection()
     }
 
     func renameArtboard(_ id: UUID, to name: String) {

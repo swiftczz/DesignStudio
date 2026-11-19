@@ -206,13 +206,20 @@ struct ArtboardWebView: NSViewRepresentable {
         web.allowsBackForwardNavigationGestures = false
         web.underPageBackgroundColor = .white
         let viewport = ArtboardViewport(webView: web, artboardSize: artboard.frame.size)
-        viewport.capturesPointer = session.tool.capturesPointer && !session.interactivePreview
+        viewport.capturesPointer = capturesPointer
         context.coordinator.handle.webView = web
         context.coordinator.handle.mode = mode
         context.coordinator.fit = fit
         context.coordinator.sharedCSS = sharedCSS
         context.coordinator.load(artboard.html, in: web)
         return viewport
+    }
+
+    /// 鼠标交给画布处理：使用画布工具时，或这个画板被框选（拖动内容整体移动）时
+    private var capturesPointer: Bool {
+        guard !session.interactivePreview else { return false }
+        return session.tool.capturesPointer
+            || session.tool == .select && session.selectedArtboardIDs.contains(artboard.id)
     }
 
     /// 画板所在画布的共用样式
@@ -230,7 +237,7 @@ struct ArtboardWebView: NSViewRepresentable {
 
     func updateNSView(_ viewport: ArtboardViewport, context: Context) {
         viewport.setArtboardSize(artboard.frame.size)
-        viewport.capturesPointer = session.tool.capturesPointer && !session.interactivePreview
+        viewport.capturesPointer = capturesPointer
         let web = viewport.webView
         let c = context.coordinator
         c.session = session

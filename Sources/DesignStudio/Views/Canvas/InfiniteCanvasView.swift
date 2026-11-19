@@ -13,6 +13,10 @@ struct InfiniteCanvasView: View {
     static let edgeInset: CGFloat = 18
     @State private var artboardDrag = ArtboardDragPreview()
     @State private var textBarSize = CGSize(width: 460, height: 38)
+    /// 在空白处拖出的框选范围（视图坐标）
+    @State private var marquee: (start: CGPoint, end: CGPoint)?
+    /// ⇧ 框选时，开始前已选中的画板（框选结果加在后面）
+    @State private var marqueeBase: [UUID] = []
 
     /// 格式工具栏的位置：选中元素上方居中；上方放不下（被顶部控制条挡住）时放到下方尺寸标签之下，左右不超出画布
     private func textBarPlacement(viewport: CGSize) -> (props: ElementProps, origin: CGPoint)? {
@@ -31,6 +35,30 @@ struct InfiniteCanvasView: View {
         return (props, CGPoint(x: x, y: y))
     }
 
+    /// 在画布空白处拖动：框选碰到的画板（⇧ 加选）
+    private var marqueeGesture: some Gesture {
+        DragGesture(minimumDistance: 3, coordinateSpace: .named(CanvasCoordinateSpace.viewport))
+            .onChanged { value in
+                guard session.tool == .select, !session.interactivePreview else { return }
+                if marquee == nil {
+                    focused = true
+                    let current = !session.selectedArtboardIDs.isEmpty ? session.selectedArtboardIDs
+                        : session.selection.flatMap { $0.elementID == nil ? [$0.artboardID] : nil } ?? []
+                    marqueeBase = NSEvent.modifierFlags.contains(.shift) ? current : []
+                }
+                marquee = (value.startLocation, value.location)
+                let a = session.worldPoint(value.startLocation), b = session.worldPoint(value.location)
+                let area = CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(b.x - a.x), height: abs(b.y - a.y))
+                let hits = (session.currentPage?.artboards ?? []).filter { $0.frame.intersects(area) }.map(\.id)
+                let ids = marqueeBase + hits.filter { !marqueeBase.contains($0) }
+                if ids.isEmpty { session.clearSelection() } else { session.selectArtboards(ids) }
+            }
+            .onEnded { _ in
+                marquee = nil
+                marqueeBase = []
+            }
+    }
+
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
@@ -40,6 +68,7 @@ struct InfiniteCanvasView: View {
                         session.clearSelection()
                         focused = true
                     }
+                    .gesture(marqueeGesture)
 
                 ForEach(session.currentPage?.artboards ?? []) { board in
                     ArtboardFrame(artboard: board, session: session, drag: artboardDrag)
@@ -55,6 +84,18 @@ struct InfiniteCanvasView: View {
                 ArtboardGuideLayer(session: session, drag: artboardDrag)
                     .allowsHitTesting(false)
                     .zIndex(3)
+
+                if let m = marquee {
+                    let r = CGRect(x: min(m.start.x, m.end.x), y: min(m.start.y, m.end.y),
+                                   width: abs(m.end.x - m.start.x), height: abs(m.end.y - m.start.y))
+                    Rectangle()
+                        .fill(CanvasPalette.selection.opacity(0.08))
+                        .strokeBorder(CanvasPalette.selection.opacity(0.9), lineWidth: 1)
+                        .frame(width: r.width, height: r.height)
+                        .offset(x: r.minX, y: r.minY)
+                        .allowsHitTesting(false)
+                        .zIndex(3)
+                }
 
                 if session.tool.capturesPointer && session.isEditable && !session.interactivePreview {
                     Group {
@@ -197,34 +238,50 @@ private enum CanvasCoordinateSpace: Hashable {
     case viewport
 }
 
+/// 拖动画板时的预览：一个或多个画板（框选后）作为整体移动，整体外框对齐到其他画板
 @Observable
 private final class ArtboardDragPreview {
-    private(set) var artboardID: UUID?
+    private(set) var movingIDs: Set<UUID> = []
     private(set) var result: ArtboardAlignment.Result?
+    private var startFrames: [UUID: CGRect] = [:]
+    private var groupFrame = CGRect.zero
     private var grabOffset = CGSize.zero
     private var neighbors: [CGRect] = []
 
-    func isMoving(_ id: UUID) -> Bool { artboardID == id }
+    func isMoving(_ id: UUID) -> Bool { movingIDs.contains(id) }
 
     func frame(for artboard: Artboard) -> CGRect {
-        isMoving(artboard.id) ? result?.frame ?? artboard.frame : artboard.frame
+        guard let start = startFrames[artboard.id], let moved = result?.frame else { return artboard.frame }
+        return start.offsetBy(dx: moved.minX - groupFrame.minX, dy: moved.minY - groupFrame.minY)
     }
 
-    func begin(_ artboard: Artboard, at pointer: CGPoint, neighbors: [CGRect]) {
-        artboardID = artboard.id
-        grabOffset = CGSize(width: pointer.x - artboard.x, height: pointer.y - artboard.y)
+    func begin(_ artboards: [Artboard], at pointer: CGPoint, neighbors: [CGRect]) {
+        guard let first = artboards.first else { return }
+        movingIDs = Set(artboards.map(\.id))
+        startFrames = Dictionary(uniqueKeysWithValues: artboards.map { ($0.id, $0.frame) })
+        groupFrame = artboards.dropFirst().reduce(first.frame) { $0.union($1.frame) }
+        grabOffset = CGSize(width: pointer.x - groupFrame.minX, height: pointer.y - groupFrame.minY)
         self.neighbors = neighbors
     }
 
-    func update(_ artboard: Artboard, at pointer: CGPoint, zoom: CGFloat) {
+    func update(at pointer: CGPoint, zoom: CGFloat) {
         let origin = CGPoint(x: pointer.x - grabOffset.width, y: pointer.y - grabOffset.height)
-        result = ArtboardAlignment.snap(CGRect(origin: origin, size: artboard.frame.size),
+        result = ArtboardAlignment.snap(CGRect(origin: origin, size: groupFrame.size),
                                         to: neighbors, tolerance: 5 / zoom)
     }
 
+    /// 松手后每个画板的新位置（没有移动时为空）
+    var finalOrigins: [UUID: CGPoint] {
+        guard let moved = result?.frame, moved.origin != groupFrame.origin else { return [:] }
+        return startFrames.mapValues {
+            CGPoint(x: $0.minX + moved.minX - groupFrame.minX, y: $0.minY + moved.minY - groupFrame.minY)
+        }
+    }
+
     func clear(_ id: UUID) {
-        guard artboardID == id else { return }
-        artboardID = nil
+        guard movingIDs.contains(id) else { return }
+        movingIDs = []
+        startFrames = [:]
         result = nil
         neighbors = []
     }
@@ -271,7 +328,11 @@ private struct ArtboardFrame: View {
     var body: some View {
         let z = session.zoom
         let origin = session.viewPoint(drag.frame(for: artboard).origin)
-        let isSelected = session.selection?.artboardID == artboard.id && session.selection?.elementID == nil
+        let isSelected = session.selectedArtboardIDs.contains(artboard.id)
+            || session.selection?.artboardID == artboard.id && session.selection?.elementID == nil
+        // 框选的画板：拖动画板内容也能整体移动，单击则单独选中这个画板（之后可以再点选里面的元素）
+        let boxSelected = session.selectedArtboardIDs.contains(artboard.id) && session.tool == .select
+            && !session.interactivePreview
 
         let width = max(artboard.width * z, 120)
         let height = headerHeight + artboard.height * z
@@ -288,6 +349,15 @@ private struct ArtboardFrame: View {
                 .background(.white)
                 .clipShape(.rect(cornerRadius: 2))
                 .shadow(color: .black.opacity(0.10), radius: 6, y: 2)
+                .overlay {
+                    if boxSelected {
+                        Color.clear
+                            .contentShape(.rect)
+                            .onTapGesture { session.select(CanvasSelection(artboardID: artboard.id, elementID: nil)) }
+                            .gesture(moveGesture)
+                            .pointerStyle(drag.isMoving(artboard.id) ? .grabActive : .grabIdle)
+                    }
+                }
         }
         .frame(width: width, height: height, alignment: .topLeading)
         .position(x: origin.x + width / 2, y: origin.y - headerHeight + height / 2)
@@ -344,32 +414,44 @@ private struct ArtboardFrame: View {
         .contentShape(.rect)
         .onTapGesture(count: 2) { newName = artboard.name; renaming = true }
         .onTapGesture { session.select(CanvasSelection(artboardID: artboard.id, elementID: nil)) }
-        .gesture(
-            DragGesture(minimumDistance: 3, coordinateSpace: .named(CanvasCoordinateSpace.viewport))
-                .updating($isDragging) { _, active, transaction in
-                    active = true
-                    transaction.animation = nil
-                }
-                .onChanged { value in
-                    guard session.isEditable, !renaming else { return }
-                    if !drag.isMoving(artboard.id) {
-                        let neighbors = (session.currentPage?.artboards ?? []).filter { $0.id != artboard.id }
-                        drag.begin(artboard, at: session.worldPoint(value.startLocation), neighbors: neighbors.map(\.frame))
-                        session.select(CanvasSelection(artboardID: artboard.id, elementID: nil))
-                        session.userMovedViewport()
-                    }
-                    drag.update(artboard, at: session.worldPoint(value.location), zoom: session.zoom)
-                }
-                .onEnded { value in
-                    guard drag.isMoving(artboard.id) else { return }
-                    defer { drag.clear(artboard.id) }
-                    drag.update(artboard, at: session.worldPoint(value.location), zoom: session.zoom)
-                    if let origin = drag.result?.frame.origin {
-                        session.moveArtboard(artboard.id, to: origin)
-                    }
-                }
-        )
+        .gesture(moveGesture)
         .pointerStyle(drag.isMoving(artboard.id) ? .grabActive : .grabIdle)
+    }
+
+    /// 拖动画板：属于框选的多个画板时整体移动，否则只移动这一个
+    private var moveGesture: some Gesture {
+        DragGesture(minimumDistance: 3, coordinateSpace: .named(CanvasCoordinateSpace.viewport))
+            .updating($isDragging) { _, active, transaction in
+                active = true
+                transaction.animation = nil
+            }
+            .onChanged { value in
+                guard session.isEditable, !renaming else { return }
+                if !drag.isMoving(artboard.id) {
+                    let all = session.currentPage?.artboards ?? []
+                    let group = session.selectedArtboardIDs.count > 1 && session.selectedArtboardIDs.contains(artboard.id)
+                        ? all.filter { session.selectedArtboardIDs.contains($0.id) } : [artboard]
+                    let ids = Set(group.map(\.id))
+                    drag.begin(group, at: session.worldPoint(value.startLocation),
+                               neighbors: all.filter { !ids.contains($0.id) }.map(\.frame))
+                    if group.count == 1 && !session.selectedArtboardIDs.contains(artboard.id) {
+                        session.select(CanvasSelection(artboardID: artboard.id, elementID: nil))
+                    }
+                    session.userMovedViewport()
+                }
+                drag.update(at: session.worldPoint(value.location), zoom: session.zoom)
+            }
+            .onEnded { value in
+                guard drag.isMoving(artboard.id) else { return }
+                defer { drag.clear(artboard.id) }
+                drag.update(at: session.worldPoint(value.location), zoom: session.zoom)
+                let origins = drag.finalOrigins
+                if origins.count == 1, let (id, origin) = origins.first {
+                    session.moveArtboard(id, to: origin)
+                } else {
+                    session.moveArtboards(origins)
+                }
+            }
     }
 }
 
@@ -389,7 +471,21 @@ private struct SelectionLayer: View {
                     .offset(x: rect.minX, y: rect.minY)
             }
 
-            if let sel = session.selection, let board = session.currentPage?.artboards.first(where: { $0.id == sel.artboardID }) {
+            if session.selectedArtboardIDs.count > 1 {
+                // 框选了多个画板：每个画板一个细框，外面一个整体选中框
+                let rects = (session.currentPage?.artboards ?? [])
+                    .filter { session.selectedArtboardIDs.contains($0.id) }
+                    .map { session.viewRect(drag.frame(for: $0)) }
+                ForEach(Array(rects.enumerated()), id: \.offset) { _, r in
+                    Rectangle()
+                        .strokeBorder(CanvasPalette.selection, lineWidth: 1)
+                        .frame(width: max(r.width, 1), height: max(r.height, 1))
+                        .offset(x: r.minX, y: r.minY)
+                }
+                if let union = rects.dropFirst().reduce(rects.first, { $0?.union($1) }) {
+                    SelectionBox(rect: union.insetBy(dx: -4, dy: -4), label: "已选 \(rects.count) 个画板")
+                }
+            } else if let sel = session.selection, let board = session.currentPage?.artboards.first(where: { $0.id == sel.artboardID }) {
                 if session.multiSelection.count > 1 {
                     // 多选：每个元素一个细框，外面一个整体的选中框，标签显示数量
                     let rects = session.multiSelection.compactMap { elementRect(board.id, $0.rect) }
