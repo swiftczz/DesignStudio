@@ -62,13 +62,12 @@ struct SidebarView: View {
     var body: some View {
         List(selection: selection) {
             Section {
-                // 侧边栏列表的图标默认用系统强调色，不跟随 .tint，这里显式用主题色
                 Label { Text("新建设计") } icon: {
-                    Image(systemName: "plus.bubble").foregroundStyle(Theme.accent)
+                    SidebarIcon(systemName: "plus.bubble")
                 }
                 .tag(SidebarRoute.home)
                 Label { Text("设计系统") } icon: {
-                    Image(systemName: "paintpalette").foregroundStyle(Theme.accent)
+                    SidebarIcon(systemName: "paintpalette")
                 }
                 .tag(SidebarRoute.designSystems)
             }
@@ -124,14 +123,23 @@ struct SidebarView: View {
     }
 }
 
+private struct SidebarIcon: View {
+    @Environment(\.backgroundProminence) private var backgroundProminence
+    let systemName: String
+
+    var body: some View {
+        Image(systemName: systemName)
+            .foregroundStyle(backgroundProminence == .increased ? Color.white : Theme.accent)
+    }
+}
+
 private struct ProjectRow: View {
     @Environment(AppModel.self) private var app
     let project: Project
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: project.kind.symbol)
-                .foregroundStyle(Theme.accent)
+            SidebarIcon(systemName: project.kind.symbol)
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 1) {
                 Text(project.displayName)
