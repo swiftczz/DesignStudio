@@ -110,3 +110,32 @@ struct LiveModelListTests {
         }
     }
 }
+
+/// 手动运行：DS_LIVE=1 swift test --filter LiveSharedStyles（会真实调用已配置的 DeepSeek）
+/// 检查模型先输出画布共用样式，画板里不再重复设计变量
+@Suite("Live shared styles", .enabled(if: ProcessInfo.processInfo.environment["DS_LIVE"] == "1"))
+struct LiveSharedStylesTests {
+    @MainActor @Test(arguments: [
+        "做一个面向独立开发者的项目管理 SaaS 官网首页和定价页",
+        "做一个记账 App 的首页和记一笔两个页面",
+    ])
+    func outputsSharedStylesheet(prompt: String) async throws {
+        let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: "DesignStudio/providers.json")
+        let profiles = try JSONDecoder().decode([ProviderProfile].self, from: Data(contentsOf: url))
+        let profile = try #require(profiles.first { $0.name == "DeepSeek" })
+        let project = Project(name: "t", kind: .prototype)
+        let req = DesignPrompt.makeRequest(project: project, designSystem: nil,
+                                           newMessage: ChatMessage(role: .user, text: prompt), profile: profile)
+        let llm = try ProviderFactory.make(profile)
+        var text = ""
+        for try await e in llm.stream(req) { if case .text(let t) = e { text += t } }
+        let shared = ArtboardParser.sharedCSS(text)
+        let boards = ArtboardParser.parse(text)
+        let rootsInBoards = boards.filter { $0.html.contains(":root") }.map { $0.name ?? "?" }
+        print("PROMPT \(prompt)\n  SHARED \(shared?.css.count ?? 0) chars\n  BOARDS \(boards.map { "\($0.name ?? "?") \(Int($0.width ?? 0))×\($0.autoHeight ? "auto" : String(Int($0.height ?? 0))) \($0.html.count) chars" })\n  :root in boards \(rootsInBoards)")
+        #expect(shared?.complete == true)
+        #expect(boards.count >= 2)
+        #expect(rootsInBoards.isEmpty)
+    }
+}

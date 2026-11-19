@@ -23,7 +23,8 @@ nonisolated struct LLMRequest: Sendable {
         if elementEdit {
             return "Output one block: ```html element patch for text/style JSON, or ```html element for replacement HTML."
         }
-        return "Output one ```html artboard=\"<name>\" width=<px> height=<px> block per artboard."
+        return "Output the ```css shared block (canvas-wide styles, only if new or changed), then one "
+            + "```html artboard=\"<name>\" width=<px> height=<px> block per artboard without repeating shared styles."
     }
 
     var latestImages: [ChatAttachment] { messages.last?.images ?? [] }

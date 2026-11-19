@@ -10,11 +10,17 @@ import Foundation
 nonisolated enum ArtboardParser {
     static func parse(_ text: String) -> [ParsedArtboard] {
         HTMLExtractor.artifacts(in: text).compactMap { artifact in
-            guard !isElementInfo(artifact.info) else { return nil }
+            guard !artifact.isSharedCSS, !isElementInfo(artifact.info) else { return nil }
             let attributes = parseInfo(artifact.info)
             return ParsedArtboard(name: attributes.name, width: attributes.width, height: attributes.height,
                                   autoHeight: attributes.autoHeight, html: artifact.html, complete: artifact.complete)
         }
+    }
+
+    /// 画布共用样式代码块（```css shared）；有多个时取最后一个
+    static func sharedCSS(_ text: String) -> (css: String, complete: Bool)? {
+        guard let block = HTMLExtractor.artifacts(in: text).last(where: \.isSharedCSS) else { return nil }
+        return (block.html, block.complete)
     }
 
     /// 元素级修改代码块：```html element

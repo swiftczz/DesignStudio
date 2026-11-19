@@ -229,10 +229,12 @@ struct ExportMenu: View {
     var body: some View {
         Menu {
             if let board = session.exportArtboard, let project = session.project {
-                let boards = session.currentPage?.artboards ?? []
+                // 导出的 HTML 都合并了画布共用样式，单独打开也完整
+                let boards = session.currentPage?.composedArtboards ?? []
+                let boardHTML = session.document.composedHTML(board.id) ?? board.html
                 Section("当前画板「\(board.name)」") {
                     Button("导出 HTML…", systemImage: "doc.richtext") {
-                        ExportService.exportHTML(board.html, name: "\(project.name)-\(board.name)")
+                        ExportService.exportHTML(boardHTML, name: "\(project.name)-\(board.name)")
                     }
                     Button("导出 PNG…", systemImage: "photo") {
                         Task { ExportService.exportPNG(await session.snapshot(board), name: "\(project.name)-\(board.name)") }
@@ -244,9 +246,9 @@ struct ExportMenu: View {
                         }
                     }
                     Button("在浏览器中打开", systemImage: "safari") {
-                        ExportService.openInBrowser(board.html, name: "\(project.name)-\(board.name)")
+                        ExportService.openInBrowser(boardHTML, name: "\(project.name)-\(board.name)")
                     }
-                    Button("拷贝 HTML", systemImage: "doc.on.doc") { ExportService.copyHTML(board.html) }
+                    Button("拷贝 HTML", systemImage: "doc.on.doc") { ExportService.copyHTML(boardHTML) }
                 }
                 Section("当前画布（\(boards.count) 个画板）") {
                     Button("导出为一个 HTML 文件…", systemImage: "doc.richtext") {
@@ -272,7 +274,7 @@ struct ExportMenu: View {
                 Divider()
                 Button("交给 Claude Code 实现…", systemImage: "hammer") {
                     let exe = app.providers.first(where: { $0.kind == .claudeCode })?.cliExecutable ?? "claude"
-                    ExportService.handoffToClaudeCode(project: project, artboards: session.document.allArtboards,
+                    ExportService.handoffToClaudeCode(project: project, artboards: session.document.composedArtboards,
                                                       designSystem: app.designSystem(for: project.designSystemID),
                                                       executable: exe)
                 }

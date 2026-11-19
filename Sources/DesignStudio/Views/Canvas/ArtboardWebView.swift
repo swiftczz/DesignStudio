@@ -210,9 +210,13 @@ struct ArtboardWebView: NSViewRepresentable {
         context.coordinator.handle.webView = web
         context.coordinator.handle.mode = mode
         context.coordinator.fit = fit
+        context.coordinator.sharedCSS = sharedCSS
         context.coordinator.load(artboard.html, in: web)
         return viewport
     }
+
+    /// 画板所在画布的共用样式
+    private var sharedCSS: String { session.displayedDocument.sharedCSS(for: artboard.id) ?? "" }
 
     /// 网页画板：高度跟随内容，vh 按一屏高度
     private var fit: ArtboardFit {
@@ -231,8 +235,13 @@ struct ArtboardWebView: NSViewRepresentable {
         let c = context.coordinator
         c.session = session
         if c.handle.webView !== web { c.handle.webView = web }
+        let shared = sharedCSS
         if c.handle.loadedSource != artboard.html {
+            c.sharedCSS = shared
             c.load(artboard.html, in: web)
+        } else if c.sharedCSS != shared {
+            c.sharedCSS = shared
+            c.handle.run("window.__ds.setShared(css)", ["css": shared])
         }
         if c.handle.mode != mode {
             c.handle.mode = mode
@@ -260,6 +269,7 @@ struct ArtboardWebView: NSViewRepresentable {
         private var initialized = false
         private var selectedElementIDs: [Int]
         var fit = ArtboardFit(on: false, viewportHeight: 900)
+        var sharedCSS = ""
 
         init(handle: ArtboardHandle, session: ProjectSession, selectedElementIDs: [Int]) {
             self.handle = handle
@@ -282,8 +292,10 @@ struct ArtboardWebView: NSViewRepresentable {
             handle.isReady = false
             initialized = false
             annotated = HTMLAnnotator.annotate(html).html
-            // 网页加载的副本：外部样式表不阻塞渲染；编辑脚本里的源码 DOM 仍用未改动的 annotated
-            web.loadHTMLString(HTMLAnnotator.nonBlockingStylesheets(annotated), baseURL: ArtboardWebView.baseURL)
+            // 网页加载的副本：带上画布共用样式，外部样式表不阻塞渲染；
+            // 编辑脚本里的源码 DOM 仍用未改动的 annotated（共用样式不会被写回画板）
+            let page = SharedStyles.compose(annotated, css: sharedCSS, live: true)
+            web.loadHTMLString(HTMLAnnotator.nonBlockingStylesheets(page), baseURL: ArtboardWebView.baseURL)
         }
 
         /// 编辑脚本就绪（DOM 解析完成）后初始化：建立源码 DOM、回传图层树

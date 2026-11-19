@@ -8,10 +8,14 @@ nonisolated enum HTMLExtractor {
         var html: String
         var complete: Bool
         var range: Range<String.Index>
+        /// 代码块语言：html，或画布共用样式的 css（```css shared）
+        var language = "html"
+
+        var isSharedCSS: Bool { language == "css" }
     }
 
     static func artifacts(in text: String) -> [Artifact] {
-        guard text.range(of: "html", options: .caseInsensitive) != nil,
+        guard text.range(of: "html", options: .caseInsensitive) != nil || text.range(of: "css", options: .caseInsensitive) != nil,
               text.contains("```") || text.contains("~~~") || text.contains("<") else { return [] }
         return MarkdownDocument.withDocument(text) { root, _ in
             let lines = text.split(omittingEmptySubsequences: false) { $0 == "\n" || $0 == "\r\n" || $0 == "\r" }
@@ -35,11 +39,14 @@ nonisolated enum HTMLExtractor {
                           let fenceInfo = cmark_node_get_fence_info(node),
                           let literal = cmark_node_get_literal(node) else { continue }
                     let parts = String(cString: fenceInfo).split(maxSplits: 1, whereSeparator: \.isWhitespace)
-                    guard parts.first?.lowercased() == "html" else { continue }
+                    let language = parts.first?.lowercased() ?? ""
                     let info = parts.count == 2 ? String(parts[1]) : ""
+                    // 画布共用样式：```css shared（其他 css 代码块仍算对话内容）
+                    let sharedCSS = language == "css" && info.lowercased().split(whereSeparator: \.isWhitespace).contains("shared")
+                    guard language == "html" || sharedCSS else { continue }
                     let html = String(cString: literal)
                     let dimensions = ArtboardParser.parseInfo(info)
-                    guard ArtboardParser.isElementInfo(info) || dimensions.name != nil
+                    guard sharedCSS || ArtboardParser.isElementInfo(info) || dimensions.name != nil
                             || dimensions.width != nil || dimensions.height != nil || dimensions.autoHeight
                             || startsHTMLDocument(html) else { continue }
 
@@ -49,7 +56,8 @@ nonisolated enum HTMLExtractor {
                     let complete = end > start && markers.count >= Int(length)
                         && closing.dropFirst(markers.count).allSatisfy(\.isWhitespace)
                     artifacts.append(Artifact(info: info, html: complete ? html.trimmed : html,
-                                              complete: complete, range: lower..<lines[end].endIndex))
+                                              complete: complete, range: lower..<lines[end].endIndex,
+                                              language: sharedCSS ? "css" : "html"))
 
                 } else if startsHTMLDocument(lines[start]) {
                     let closing = text.range(of: "</html>", options: .caseInsensitive, range: lower..<text.endIndex)
@@ -73,12 +81,12 @@ nonisolated enum HTMLExtractor {
     }
 
     static func extract(from text: String) -> String? {
-        guard let first = artifacts(in: text).first, first.complete, !first.html.isEmpty else { return nil }
+        guard let first = artifacts(in: text).first(where: { !$0.isSharedCSS }), first.complete, !first.html.isEmpty else { return nil }
         return first.html
     }
 
     static func partial(from text: String) -> String? {
-        guard let first = artifacts(in: text).first, !first.html.isEmpty else { return nil }
+        guard let first = artifacts(in: text).first(where: { !$0.isSharedCSS }), !first.html.isEmpty else { return nil }
         return first.html
     }
 
@@ -109,7 +117,9 @@ nonisolated enum HTMLExtractor {
 
     /// 流式过程中已写出的 HTML 总行数（用于进度提示）
     static func partialLineCount(_ text: String) -> Int {
-        ArtboardParser.parse(text).reduce(0) { sum, a in sum + a.html.reduce(0) { $1 == "\n" ? $0 + 1 : $0 } }
+        // 共用样式和画板代码都算进去
+        artifacts(in: text).filter { $0.isSharedCSS || !ArtboardParser.isElementInfo($0.info) }
+            .reduce(0) { sum, a in sum + a.html.reduce(0) { $1 == "\n" ? $0 + 1 : $0 } }
     }
 }
 

@@ -40,8 +40,20 @@ nonisolated struct DesignPage: Codable, Identifiable, Hashable, Sendable {
     var id = UUID()
     var name: String
     var artboards: [Artboard] = []
+    /// 画布共用样式：同一画布的每个画板加载时自动带上（模型输出的 ```css shared 代码块）
+    var sharedCSS: String?
 
     static func defaultName(index: Int) -> String { "画布 \(index)" }
+
+    /// 画板带上共用样式后的完整 HTML：导出、拷贝、交接时使用，可以单独打开
+    func composedHTML(_ artboard: Artboard) -> String {
+        SharedStyles.compose(artboard.html, css: sharedCSS)
+    }
+
+    /// 所有画板（HTML 已合并共用样式）
+    var composedArtboards: [Artboard] {
+        artboards.map { var a = $0; a.html = composedHTML($0); return a }
+    }
 
     /// 兼容旧项目的默认名称，保留保存格式和自定义名称。
     var displayName: String {
@@ -119,6 +131,30 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
 
     var isEmpty: Bool { pages.allSatisfy { $0.artboards.isEmpty } }
     var allArtboards: [Artboard] { pages.flatMap(\.artboards) }
+    /// 所有画布的画板（HTML 已合并各自画布的共用样式）
+    var composedArtboards: [Artboard] { pages.flatMap(\.composedArtboards) }
+
+    /// 画板所在画布的共用样式
+    func sharedCSS(for artboardID: UUID) -> String? {
+        pages.first { $0.artboards.contains { $0.id == artboardID } }?.sharedCSS
+    }
+
+    /// 画板带上所在画布共用样式后的完整 HTML
+    func composedHTML(_ artboardID: UUID) -> String? {
+        for p in pages { if let a = p.artboards.first(where: { $0.id == artboardID }) { return p.composedHTML(a) } }
+        return nil
+    }
+
+    /// 替换画布的共用样式；内容没变时返回 false
+    @discardableResult
+    mutating func setSharedCSS(_ css: String, in pageID: UUID?) -> Bool {
+        let index = pageID.flatMap { id in pages.firstIndex { $0.id == id } } ?? 0
+        guard pages.indices.contains(index) else { return false }
+        let value: String? = css.trimmed.isEmpty ? nil : css.trimmed
+        guard pages[index].sharedCSS != value else { return false }
+        pages[index].sharedCSS = value
+        return true
+    }
 
     func page(_ id: UUID?) -> DesignPage? {
         guard let id else { return pages.first }

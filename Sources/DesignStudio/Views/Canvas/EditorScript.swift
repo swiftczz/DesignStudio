@@ -699,6 +699,13 @@ nonisolated enum EditorScript {
 
       // ---------- 供 Swift 调用的接口 ----------
       window.__ds = {
+        // 画布共用样式改了：就地替换，不重新加载画板
+        setShared: function(css){
+          var s = document.getElementById('__ds-shared');
+          if (!s) { s = document.createElement('style'); s.id = '__ds-shared'; (document.head || document.documentElement).prepend(s); }
+          s.textContent = css || '';
+          scheduleFit(true);
+        },
         fitContent: function(on, vh){
           fit.on = !!on;
           if (vh) fit.vh = vh;

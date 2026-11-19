@@ -273,3 +273,84 @@ struct CanvasBundleTests {
         #expect(CanvasBundle.make(title: "deck", artboards: boards, kind: .slides).contains(#""mode":"single""#))
     }
 }
+
+struct SharedStylesTests {
+    static let reply = """
+    做了首页和详情两个界面，颜色和按钮放在共用样式里。
+    ```css shared
+    :root { --accent: #3B5BFD; }
+    .btn { background: var(--accent); color: #fff; }
+    ```
+    ```html artboard="首页" width=390 height=844
+    <!DOCTYPE html><html><head><meta charset="utf-8"><style>.hero{padding:24px}</style></head><body><button class="btn">开始</button></body></html>
+    ```
+    ```html artboard="详情" width=390 height=844
+    <!DOCTYPE html><html><head><style>.x{}</style></head><body>详情</body></html>
+    ```
+    """
+
+    @Test func parsesSharedBlockSeparatelyFromArtboards() throws {
+        let shared = try #require(ArtboardParser.sharedCSS(Self.reply))
+        #expect(shared.complete && shared.css.contains("--accent"))
+        let boards = ArtboardParser.parse(Self.reply)
+        #expect(boards.map(\.name) == ["首页", "详情"])
+        // 对话里只留下说明文字，共用样式代码块也不显示
+        #expect(HTMLExtractor.conversationalText(Self.reply) == "做了首页和详情两个界面，颜色和按钮放在共用样式里。")
+        // 普通的 css 代码块仍是对话内容
+        #expect(ArtboardParser.sharedCSS("看这段：\n```css\n.a{}\n```") == nil)
+    }
+
+    @Test func composesSharedStylesForExport() throws {
+        var doc = DesignDocument()
+        doc.setSharedCSS(try #require(ArtboardParser.sharedCSS(Self.reply)).css, in: nil)
+        doc.merge(ArtboardParser.parse(Self.reply), into: nil, kind: .prototype)
+        let page = try #require(doc.pages.first)
+        let home = try #require(page.artboard(named: "首页"))
+        #expect(!home.html.contains("--accent"))   // 画板本身不含共用样式
+
+        let composed = page.composedHTML(home)
+        let charset = try #require(composed.range(of: "<meta charset=\"utf-8\">"))
+        let shared = try #require(composed.range(of: "<style data-ds-shared>"))
+        let own = try #require(composed.range(of: "<style>.hero"))
+        #expect(charset.upperBound <= shared.lowerBound && shared.upperBound <= own.lowerBound)
+
+        let detail = page.composedHTML(try #require(page.artboard(named: "详情")))
+        #expect(detail.contains("<head>\n<style data-ds-shared>"))
+        #expect(SharedStyles.compose("<p>x</p>", css: ".a{}").hasPrefix("<style data-ds-shared>"))
+        #expect(SharedStyles.compose("<p>x</p>", css: nil) == "<p>x</p>")
+        #expect(!SharedStyles.compose("<head></head>", css: "a{content:'</style>'}").contains("'</style>'"))
+
+        // 只改共用样式的回复：画板不变，共用样式更新
+        var restyled = doc
+        let first = restyled.setSharedCSS(":root { --accent: #FF6A3D; }", in: nil)
+        let again = restyled.setSharedCSS(":root { --accent: #FF6A3D; }", in: nil)
+        #expect(first && !again)
+        #expect(restyled.pages[0].artboards == doc.pages[0].artboards)
+    }
+
+    @MainActor @Test func canvasPageUsesSharedStylesWithoutWritingThemBack() async throws {
+        let raw = "<!DOCTYPE html><html><head><style>.own{color:red}</style></head><body><button class=\"btn\">Go</button></body></html>"
+        let annotated = HTMLAnnotator.annotate(raw).html
+        let live = SharedStyles.compose(annotated, css: ".btn{background:rgb(1, 2, 3)}", live: true)
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let navigation = ElementPatchWebKitTests.NavigationWaiter()
+        web.navigationDelegate = navigation
+        await withCheckedContinuation { continuation in
+            navigation.loaded = continuation
+            web.loadHTMLString(live, baseURL: nil)
+        }
+        _ = try await web.evaluateJavaScript(EditorScript.editor)
+        let result = try await web.callAsyncJavaScript("""
+            window.__ds.init(source, 'select');
+            const btn = document.querySelector('.btn');
+            const before = getComputedStyle(btn).backgroundColor;
+            const id = +btn.getAttribute('data-ds-id');
+            const edited = JSON.parse(window.__ds.patchElement(id, 'Start', null));
+            window.__ds.setShared('.btn{background:rgb(9, 8, 7)}');
+            const after = getComputedStyle(btn).backgroundColor;
+            const code = window.__ds.inlined(id);
+            return [before, after, edited.source.includes('rgb(1, 2, 3)') ? 'leaked' : 'clean', code.includes('rgb(9, 8, 7)') || code.includes('#090807') ? 'shown' : code];
+            """, arguments: ["source": annotated], in: nil, contentWorld: .page)
+        #expect(result as? [String] == ["rgb(1, 2, 3)", "rgb(9, 8, 7)", "clean", "shown"])
+    }
+}

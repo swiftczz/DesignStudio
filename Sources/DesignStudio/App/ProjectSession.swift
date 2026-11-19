@@ -593,7 +593,7 @@ final class ProjectSession {
             if let id = sel.elementID {
                 text = await handle(for: sel.artboardID).call("return window.__ds.inlined(id)", ["id": id])
             } else {
-                text = document.artboard(sel.artboardID)?.html
+                text = document.composedHTML(sel.artboardID)
             }
             guard let text else { return }
             let pb = NSPasteboard.general
@@ -1207,12 +1207,16 @@ final class ProjectSession {
     private func updateLivePreview() {
         guard generationElement == nil else { return }
         let parsed = ArtboardParser.previewable(streamingText)
-        guard !parsed.isEmpty else { return }
+        // 共用样式写完整后立即生效（它在画板代码之前输出）
+        let shared = ArtboardParser.sharedCSS(streamingText).flatMap { $0.complete ? $0.css : nil }
+        guard !parsed.isEmpty || shared != nil else { return }
         var live = liveDocument ?? document
         let before = live.page(generationPageID)?.artboards.count ?? 0
-        let changed = live.merge(parsed, into: generationPageID, kind: kind, fallbackTarget: generationTarget,
-                                 previewArtboardIDs: generatedPreviewIDs)
-        guard !changed.isEmpty else { return }
+        let sharedChanged = shared.map { live.setSharedCSS($0, in: generationPageID) } ?? false
+        let changed = parsed.isEmpty ? [] : live.merge(parsed, into: generationPageID, kind: kind,
+                                                       fallbackTarget: generationTarget,
+                                                       previewArtboardIDs: generatedPreviewIDs)
+        guard !changed.isEmpty || sharedChanged else { return }
         liveDocument = live
         streamingArtboardIDs.formUnion(changed)
         if let sel = selection, streamingArtboardIDs.contains(sel.artboardID), sel.elementID != nil {
@@ -1253,10 +1257,15 @@ final class ProjectSession {
             }
         }
 
+        // 画布共用样式：只采用完整输出的代码块（只改整体风格时，回复里可能只有它）
+        let sharedCSS = generationElement == nil
+            ? ArtboardParser.sharedCSS(text).flatMap { $0.complete ? $0.css : nil } : nil
+
         var newVersion: DesignVersion?
-        if error == nil, !outputs.isEmpty {
+        if error == nil, !outputs.isEmpty || sharedCSS != nil {
             // 保留已预览画板的 ID。中途取消时，从原文档合并完整结果，避免提交半张画板。
             var merged = outputs.count == parsed.count ? (liveDocument ?? document) : document
+            if let sharedCSS { merged.setSharedCSS(sharedCSS, in: generationPageID) }
             merged.merge(outputs, into: generationPageID, kind: kind, fallbackTarget: generationTarget,
                          previewArtboardIDs: generatedPreviewIDs)
             commit { $0 = merged }
