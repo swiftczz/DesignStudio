@@ -23,17 +23,12 @@ final class AppModel {
     var projectToExport: Project?
     var route: SidebarRoute = .home {
         didSet {
-            // 从主页 / 设计系统进入项目时收起项目边栏，只留对话栏和画布；离开项目回到这些页面时再展开。
-            // 在项目之间切换（边栏已手动打开）时保持用户当前的状态
-            switch (oldValue, route) {
-            case (.project, .project): break
-            case (_, .project): withAnimation(.snappy(duration: 0.25)) { sidebarVisibility = .detailOnly }
-            case (.project, _): withAnimation(.snappy(duration: 0.25)) { sidebarVisibility = .all }
-            default: break
-            }
+            // 离开全屏查看的项目时，恢复进入全屏前的侧栏状态。
+            guard oldValue != route, case .project(let id) = oldValue else { return }
+            sessions[id]?.exitFullScreen()
         }
     }
-    /// 左侧项目边栏的显示状态（进入项目和全屏时收起）
+    /// 左侧项目边栏默认展开，仅随手动切换和画板全屏变化。
     var sidebarVisibility: NavigationSplitViewVisibility = .all
     var thumbnailStamps: [UUID: Date] = [:]
     private(set) var regeneratingTitles: Set<UUID> = []
@@ -208,12 +203,12 @@ final class AppModel {
     func deleteProject(_ id: UUID) {
         sessions[id]?.stop()
         persistence.setGenerating(id, false)
+        if route == .project(id) { route = .home }
         sessions[id] = nil
         projects.removeAll { $0.id == id }
         persistence.deleteProject(id)
         thumbnailStamps[id] = nil
         thumbnailCache[id] = nil
-        if route == .project(id) { route = .home }
     }
 
     // MARK: - Sessions
