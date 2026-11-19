@@ -201,6 +201,8 @@ nonisolated struct EditorMessage: Decodable, Sendable {
     var multi: [SelectedElement]?
     /// 选中元素在当前网页渲染帧中的边界。
     var geometry: [SelectedElement]?
+    /// 网页画板的整页内容高度（contentHeight 消息）
+    var h: Double?
 }
 
 /// 右键菜单需要的元素信息（决定哪些菜单项可用）

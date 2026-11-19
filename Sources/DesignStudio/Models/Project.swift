@@ -63,9 +63,11 @@ nonisolated enum ProjectKind: String, Codable, CaseIterable, Identifiable, Senda
             First work out WHAT the user wants to design, then choose the artboard size for that medium. Do not \
             assume a phone app — read the request carefully:
             - Mobile app (App, iOS, Android, 小程序, "手机上"): one artboard per screen, 390×844. Tablet app: 1180×820.
-            - Website (官网, landing page, 落地页, 网站, 博客, 作品集, marketing / product page): desktop web, width 1440. \
-            A scrolling page is ONE artboard per page whose height fits the whole page (typically 2400–5000) so the \
-            full page is visible on the canvas; add a 390-wide mobile version only if the user asks for responsive.
+            - Website (官网, landing page, 落地页, 网站, 博客, 作品集, marketing / product page): desktop web, width 1440, \
+            height=auto. A scrolling page is ONE artboard per page; the canvas grows the artboard to the page's full \
+            content height, so never fix the height of html/body and never clip the page. Size hero sections with vh \
+            or px as on a real site (100vh = one 900px screen). Add a 390-wide mobile version (also height=auto) only \
+            if the user asks for responsive.
             - Web app / SaaS / dashboard / admin / 后台 / 管理系统 / 控制台 / CRM / internal tool: one artboard per \
             screen at 1440×900 (app shell with sidebar or top bar; panels scroll inside).
             - Desktop app (macOS / Windows software, 桌面客户端): 1280×800 window content.

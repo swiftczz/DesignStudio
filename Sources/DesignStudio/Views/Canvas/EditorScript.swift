@@ -91,7 +91,7 @@ nonisolated enum EditorScript {
         for (var i = 0; i < document.styleSheets.length; i++) {
           var sheet = document.styleSheets[i];
           // 编辑器自己注入的样式（选择模式下的光标等）不属于设计
-          if (sheet.ownerNode && sheet.ownerNode.id === '__ds-editor-style') continue;
+          if (sheet.ownerNode && (sheet.ownerNode.id === '__ds-editor-style' || sheet.ownerNode.id === '__ds-fit-style')) continue;
           try { walk(sheet.cssRules); } catch(_) {}
         }
         ruleCache = list;
@@ -124,7 +124,8 @@ nonisolated enum EditorScript {
             if (/^\*(::?[\w-]+)*$/.test(sel)) return;
             try { if (el.matches(sel)) best = Math.max(best, specificity(sel)); } catch(_) {}
           });
-          if (best >= 0) matched.push({ spec: best, order: order, decls: declsOf(r.style.cssText) });
+          // 网页画板把 vh 换成了像素，代码里仍显示原始写法
+          if (best >= 0) matched.push({ spec: best, order: order, decls: declsOf(vhOriginal.get(r) || r.style.cssText) });
         });
         matched.sort(function(a, b){ return a.spec - b.spec || a.order - b.order; });
         matched.push({ decls: declsOf(inlineText) });
@@ -624,8 +625,94 @@ nonisolated enum EditorScript {
         post({ type: 'key', key: e.key, meta: e.metaKey, shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey });
       }, true);
 
+      // ---------- 网页画板：高度随内容 ----------
+      // 网页按真实浏览器的视口高度排版（vh 固定为一屏，不随画板变高而变高），
+      // 再把整页内容高度报给 Swift，画板随之变高，内容不会被画板截掉。
+      var fit = { on: false, vh: 900, last: -1, timer: null, observer: null };
+      var vhOriginal = new WeakMap(), pinnedRules = [];
+      var VH_RE = /(-?\d*\.?\d+)(dvh|svh|lvh|vh|vmin|vmax)\b/gi;
+      function vhToPx(text){
+        var vw = document.documentElement.clientWidth || window.innerWidth;
+        return text.replace(VH_RE, function(m, n, unit){
+          unit = unit.toLowerCase();
+          var base = unit === 'vmin' ? Math.min(vw, fit.vh) : unit === 'vmax' ? Math.max(vw, fit.vh) : fit.vh;
+          return (Math.round(parseFloat(n) * base) / 100) + 'px';
+        });
+      }
+      function pinStyle(style){
+        var changes = [];
+        for (var i = 0; i < style.length; i++) {
+          var name = style[i], v = style.getPropertyValue(name);
+          VH_RE.lastIndex = 0;
+          if (v && VH_RE.test(v)) changes.push([name, v, style.getPropertyPriority(name)]);
+        }
+        changes.forEach(function(c){ style.setProperty(c[0], vhToPx(c[1]), c[2]); });
+        return changes.length > 0;
+      }
+      function pinRules(rules){
+        for (var i = 0; i < rules.length; i++) {
+          var r = rules[i];
+          if (r.style) {
+            var before = r.style.cssText;
+            if (pinStyle(r.style) && !vhOriginal.has(r)) { vhOriginal.set(r, before); pinnedRules.push([r, before]); }
+          } else if (r.cssRules) { try { pinRules(r.cssRules); } catch(_) {} }
+        }
+      }
+      function pinViewportUnits(){
+        for (var i = 0; i < document.styleSheets.length; i++) {
+          var sheet = document.styleSheets[i], owner = sheet.ownerNode;
+          if (owner && (owner.id === '__ds-editor-style' || owner.id === '__ds-fit-style')) continue;
+          try { pinRules(sheet.cssRules); } catch(_) {}   // 跨域样式表读不到规则
+        }
+        document.querySelectorAll('[style]').forEach(function(el){ pinStyle(el.style); });
+      }
+      function unpinViewportUnits(){
+        pinnedRules.forEach(function(p){ p[0].style.cssText = p[1]; vhOriginal.delete(p[0]); });
+        pinnedRules = [];
+      }
+      function contentHeight(){
+        var b = document.body; if (!b) return 0;
+        var cs = window.getComputedStyle(b);
+        // body 上的 overflow:hidden 会作用到整个视口，超出一屏的内容也算进来，画板长高后就能看到
+        var h = Math.max(b.scrollHeight, b.offsetHeight);
+        return Math.ceil(h + (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0));
+      }
+      function applyFitStyle(){
+        var s = document.getElementById('__ds-fit-style');
+        if (!fit.on) { if (s) s.remove(); return; }
+        if (!s) { s = document.createElement('style'); s.id = '__ds-fit-style'; document.documentElement.appendChild(s); }
+        // 页面不能把自己锁成画板高度：html / body 随内容增高，至少一屏
+        s.textContent = 'html,body{height:auto!important;max-height:none!important}body{min-height:' + fit.vh + 'px!important}';
+      }
+      function scheduleFit(force){
+        if (!fit.on) return;
+        if (force) fit.last = -1;
+        clearTimeout(fit.timer);
+        fit.timer = setTimeout(function(){
+          pinViewportUnits();
+          var h = contentHeight();
+          if (h > 0 && Math.abs(h - fit.last) > 1) { fit.last = h; post({ type: 'contentHeight', h: h }); }
+        }, 120);
+      }
+      window.addEventListener('resize', function(){ scheduleFit(true); });
+      window.addEventListener('load', function(){ scheduleFit(true); });
+
       // ---------- 供 Swift 调用的接口 ----------
       window.__ds = {
+        fitContent: function(on, vh){
+          fit.on = !!on;
+          if (vh) fit.vh = vh;
+          applyFitStyle();
+          if (fit.on) {
+            if (!fit.observer && window.ResizeObserver) fit.observer = new ResizeObserver(function(){ scheduleFit(false); });
+            if (fit.observer && document.body) fit.observer.observe(document.body);
+            pinViewportUnits();
+            scheduleFit(true);
+          } else {
+            if (fit.observer) fit.observer.disconnect();
+            unpinViewportUnits();
+          }
+        },
         init: function(source, m){
           src = new DOMParser().parseFromString(source, 'text/html');
           maxId = 0;

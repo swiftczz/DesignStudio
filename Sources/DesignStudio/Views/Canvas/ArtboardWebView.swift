@@ -105,6 +105,12 @@ final class ArtboardViewport: NSView {
     }
 }
 
+/// 网页画板的高度设置
+nonisolated struct ArtboardFit: Equatable, Sendable {
+    var on: Bool
+    var viewportHeight: Double
+}
+
 /// 画板网页的编辑模式
 nonisolated enum EditorMode: String, Sendable {
     case select, comment, off
@@ -203,8 +209,14 @@ struct ArtboardWebView: NSViewRepresentable {
         viewport.capturesPointer = session.tool.capturesPointer && !session.interactivePreview
         context.coordinator.handle.webView = web
         context.coordinator.handle.mode = mode
+        context.coordinator.fit = fit
         context.coordinator.load(artboard.html, in: web)
         return viewport
+    }
+
+    /// 网页画板：高度跟随内容，vh 按一屏高度
+    private var fit: ArtboardFit {
+        ArtboardFit(on: artboard.fitsContent(in: session.kind), viewportHeight: artboard.viewportHeight)
     }
 
     /// 始终占满画布给出的尺寸（画板宽高 × 缩放）
@@ -227,6 +239,10 @@ struct ArtboardWebView: NSViewRepresentable {
             c.handle.run("window.__ds && window.__ds.setMode(m)", ["m": mode.rawValue])
         }
         c.trackSelection(selectedElementIDs)
+        if c.fit != fit {
+            c.fit = fit
+            c.applyFit()
+        }
     }
 
     static func dismantleNSView(_ viewport: ArtboardViewport, coordinator: Coordinator) {
@@ -243,11 +259,16 @@ struct ArtboardWebView: NSViewRepresentable {
         private var annotated = ""
         private var initialized = false
         private var selectedElementIDs: [Int]
+        var fit = ArtboardFit(on: false, viewportHeight: 900)
 
         init(handle: ArtboardHandle, session: ProjectSession, selectedElementIDs: [Int]) {
             self.handle = handle
             self.session = session
             self.selectedElementIDs = selectedElementIDs
+        }
+
+        func applyFit() {
+            handle.run("window.__ds.fitContent(on, vh)", ["on": fit.on, "vh": fit.viewportHeight])
         }
 
         func trackSelection(_ ids: [Int]) {
@@ -279,8 +300,10 @@ struct ArtboardWebView: NSViewRepresentable {
                 let r = await self.handle.decode(InitResult.self, """
                     const result = window.__ds.init(s, m);
                     window.__ds.trackSelection(ids);
+                    window.__ds.fitContent(on, vh);
                     return result;
-                    """, ["s": source, "m": mode.rawValue, "ids": self.selectedElementIDs])
+                    """, ["s": source, "m": mode.rawValue, "ids": self.selectedElementIDs,
+                          "on": self.fit.on, "vh": self.fit.viewportHeight])
                 self.session?.artboardDidLoad(id, tree: r?.tree ?? [])
             }
         }

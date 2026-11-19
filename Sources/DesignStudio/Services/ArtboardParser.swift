@@ -13,7 +13,7 @@ nonisolated enum ArtboardParser {
             guard !isElementInfo(artifact.info) else { return nil }
             let attributes = parseInfo(artifact.info)
             return ParsedArtboard(name: attributes.name, width: attributes.width, height: attributes.height,
-                                  html: artifact.html, complete: artifact.complete)
+                                  autoHeight: attributes.autoHeight, html: artifact.html, complete: artifact.complete)
         }
     }
 
@@ -31,7 +31,7 @@ nonisolated enum ArtboardParser {
     }
 
     /// 解析 `artboard="名称" width=390 height=844`（也接受 name= / title=、单引号）
-    static func parseInfo(_ info: String) -> (name: String?, width: Double?, height: Double?) {
+    static func parseInfo(_ info: String) -> (name: String?, width: Double?, height: Double?, autoHeight: Bool) {
         func value(_ keys: [String]) -> String? {
             for key in keys {
                 let pattern = #"\b"# + key + #"\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"']+))"#
@@ -45,8 +45,10 @@ nonisolated enum ArtboardParser {
         }
         let name = value(["artboard", "name", "title"]).map(\.trimmed).flatMap { $0.isEmpty ? nil : $0 }
         let width = value(["width", "w"]).flatMap { Double($0.replacingOccurrences(of: "px", with: "")) }
-        let height = value(["height", "h"]).flatMap { Double($0.replacingOccurrences(of: "px", with: "")) }
-        return (name, width, height)
+        let rawHeight = value(["height", "h"])
+        let height = rawHeight.flatMap { Double($0.replacingOccurrences(of: "px", with: "")) }
+        let auto = rawHeight?.trimmed.lowercased() == "auto"
+        return (name, width, height, auto)
     }
 
     /// 只保留有实际内容的部分代码块（实时预览时过滤掉刚开头的块）

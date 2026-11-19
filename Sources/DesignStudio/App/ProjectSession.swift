@@ -417,6 +417,8 @@ final class ProjectSession {
             }
         case "key":
             handleKey(key: msg.key ?? "", command: msg.meta ?? false, shift: msg.shift ?? false)
+        case "contentHeight":
+            if let h = msg.h { fitArtboardHeight(artboardID, contentHeight: h) }
         case "error":
             if let m = msg.message, !m.isEmpty { artboardErrors[artboardID] = m }
         default:
@@ -790,6 +792,23 @@ final class ProjectSession {
     func updateArtboard(_ id: UUID, _ mutate: @escaping (inout Artboard) -> Void) {
         guard isEditable else { return }
         commit { $0.updateArtboard(id, mutate) }
+    }
+
+    /// 网页画板的高度跟随页面内容（至少一屏）。这是画布测量结果，不进撤销记录；
+    /// 撤销后画板尺寸变回旧值，网页会重新测量再调整回来。
+    func fitArtboardHeight(_ id: UUID, contentHeight: Double) {
+        guard let board = displayedDocument.artboard(id), board.fitsContent(in: kind) else { return }
+        let target = min(max(contentHeight.rounded(.up), board.viewportHeight), 30000)
+        guard abs(target - board.height) >= 2 else { return }
+        if var live = liveDocument {
+            live.updateArtboard(id) { $0.height = target }
+            liveDocument = live
+        }
+        guard document.artboard(id) != nil else { return }
+        var next = document
+        next.updateArtboard(id) { $0.height = target }
+        document = next
+        persist()
     }
 
     func moveArtboard(_ id: UUID, to origin: CGPoint) {

@@ -13,8 +13,24 @@ nonisolated struct Artboard: Codable, Identifiable, Hashable, Sendable {
     var y: Double = 0
     var width: Double
     var height: Double
+    /// 网页画板：高度跟随页面内容（模型输出 `height=auto`）。nil 时按尺寸判断，见 `fitsContent(in:)`
+    var autoHeight: Bool?
 
     var frame: CGRect { CGRect(x: x, y: y, width: width, height: height) }
+
+    /// 画板高度是否跟随页面内容：网页不限制高度，整页内容都显示出来。
+    /// 没有明确标记时，桌面宽度（≥ 1200）且不是 16:9 幻灯片的画板按网页处理；幻灯片、海报项目始终固定尺寸。
+    func fitsContent(in kind: ProjectKind) -> Bool {
+        guard kind != .slides, kind != .poster else { return false }
+        if let autoHeight { return autoHeight }
+        return width >= 1200 && abs(width / max(height, 1) - 16.0 / 9.0) > 0.02
+    }
+
+    /// 网页里一屏的高度（vh 的基准）：桌面 900（1280 宽为 800），平板 1024，手机 844
+    var viewportHeight: Double {
+        if width >= 1200 { return min(900, (width * 0.625).rounded()) }
+        return width >= 700 ? 1024 : 844
+    }
 }
 
 nonisolated struct DesignPage: Codable, Identifiable, Hashable, Sendable {
@@ -172,16 +188,23 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
             if let i = target {
                 let current = page.artboards[i]
                 guard current.html != html || (out.width ?? current.width) != current.width
-                    || (out.height ?? current.height) != current.height else { continue }
+                    || (!out.autoHeight && (out.height ?? current.height) != current.height)
+                    || (out.autoHeight && current.autoHeight != true) else { continue }
                 page.artboards[i].html = html
                 if let w = out.width { page.artboards[i].width = w }
-                if let h = out.height { page.artboards[i].height = h }
+                // height=auto：保留画布按内容量出的高度
+                if out.autoHeight { page.artboards[i].autoHeight = true }
+                else if let h = out.height { page.artboards[i].height = h }
                 changed.append(page.artboards[i].id)
             } else {
                 let name = out.name ?? Self.defaultName(kind: kind, index: page.artboards.count + 1 + n)
-                let board = Artboard(name: name, html: html,
+                var board = Artboard(name: name, html: html,
                                      width: out.width ?? defaultSize.width,
                                      height: out.height ?? defaultSize.height)
+                if out.autoHeight {
+                    board.autoHeight = true
+                    board.height = board.viewportHeight   // 加载后按内容增高
+                }
                 page.artboards.append(board)
                 changed.append(board.id)
             }
@@ -230,6 +253,8 @@ nonisolated struct ParsedArtboard: Equatable, Sendable {
     var name: String?
     var width: Double?
     var height: Double?
+    /// `height=auto`：网页高度随内容
+    var autoHeight = false
     var html: String
     /// 代码块是否已闭合
     var complete: Bool

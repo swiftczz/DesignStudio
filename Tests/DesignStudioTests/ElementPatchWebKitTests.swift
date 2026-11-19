@@ -161,7 +161,7 @@ struct ElementPatchWebKitTests {
         #expect(result as? Bool == true)
     }
 
-    @MainActor private final class NavigationWaiter: NSObject, WKNavigationDelegate {
+    @MainActor fileprivate final class NavigationWaiter: NSObject, WKNavigationDelegate {
         var loaded: CheckedContinuation<Void, Never>?
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             loaded?.resume()
@@ -169,4 +169,83 @@ struct ElementPatchWebKitTests {
         }
     }
 
+}
+
+struct ArtboardAutoHeightTests {
+    @Test func parsesAutoHeightAndKeepsMeasuredHeightOnMerge() throws {
+        let reply = """
+        首页。
+        ```html artboard="首页" width=1440 height=auto
+        <!DOCTYPE html><html><body><h1>Hi</h1></body></html>
+        ```
+        """
+        let parsed = ArtboardParser.parse(reply)
+        let out = try #require(parsed.first)
+        #expect(out.autoHeight && out.height == nil && out.width == 1440)
+
+        var doc = DesignDocument()
+        doc.merge(parsed, into: nil, kind: .prototype)
+        var board = try #require(doc.pages.first?.artboards.first)
+        #expect(board.autoHeight == true && board.height == 900)
+
+        // 画布量出整页高度后，模型再次输出 height=auto 不会把高度改回去
+        doc.updateArtboard(board.id) { $0.height = 3600 }
+        let edited = ArtboardParser.parse(reply.replacingOccurrences(of: "Hi", with: "Hello"))
+        doc.merge(edited, into: nil, kind: .prototype)
+        board = try #require(doc.pages.first?.artboards.first)
+        #expect(board.height == 3600 && board.html.contains("Hello"))
+    }
+
+    @Test func detectsWebPagesBySize() {
+        let site = Artboard(name: "官网", html: "", width: 1440, height: 4000)
+        let app = Artboard(name: "后台", html: "", width: 1440, height: 900)
+        let slide = Artboard(name: "封面", html: "", width: 1920, height: 1080)
+        let phone = Artboard(name: "首页", html: "", width: 390, height: 844)
+        #expect(site.fitsContent(in: .prototype) && app.fitsContent(in: .prototype))
+        #expect(!slide.fitsContent(in: .prototype) && !phone.fitsContent(in: .prototype))
+        #expect(!site.fitsContent(in: .slides))
+        #expect(site.viewportHeight == 900)
+    }
+
+    @MainActor @Test func measuresFullPageAndPinsViewportUnits() async throws {
+        // 声明 1440×900，但页面有一屏 hero + 1500px 内容，并且 body 被锁成 100vh
+        let raw = """
+        <!doctype html><html><head><style>
+        html, body { margin: 0; height: 100vh; overflow: hidden; }
+        .hero { height: 100vh; } .rest { height: 1500px; }
+        </style></head><body><section class="hero">Hero</section><section class="rest">More</section></body></html>
+        """
+        let html = HTMLAnnotator.annotate(raw).html
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 1440, height: 900))
+        let navigation = ElementPatchWebKitTests.NavigationWaiter()
+        web.navigationDelegate = navigation
+        await withCheckedContinuation { continuation in
+            navigation.loaded = continuation
+            web.loadHTMLString(html, baseURL: nil)
+        }
+        _ = try await web.evaluateJavaScript(EditorScript.editor)
+        func measure() async throws -> [Double] {
+            let r = try await web.callAsyncJavaScript("""
+                const hero = document.querySelector('.hero');
+                return [hero.getBoundingClientRect().height,
+                        Math.max(document.body.scrollHeight, document.body.offsetHeight)];
+                """, arguments: [:], in: nil, contentWorld: .page)
+            return (r as? [NSNumber])?.map(\.doubleValue) ?? []
+        }
+        _ = try await web.callAsyncJavaScript("window.__ds.init(source, 'select'); window.__ds.fitContent(true, 900);",
+                                              arguments: ["source": html], in: nil, contentWorld: .page)
+        #expect(try await measure() == [900, 2400])
+
+        // 画板变高后 hero 仍是一屏，整页高度不变（不会越拉越高）
+        web.frame.size.height = 2400
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(try await measure() == [900, 2400])
+
+        // 代码面板里仍显示原始的 vh 写法
+        let code = try await web.callAsyncJavaScript("""
+            const id = +document.querySelector('.hero').getAttribute('data-ds-id');
+            return window.__ds.inlined(id);
+            """, arguments: [:], in: nil, contentWorld: .page) as? String
+        #expect(code?.contains("100vh") == true)
+    }
 }

@@ -40,7 +40,7 @@ nonisolated enum HTMLExtractor {
                     let html = String(cString: literal)
                     let dimensions = ArtboardParser.parseInfo(info)
                     guard ArtboardParser.isElementInfo(info) || dimensions.name != nil
-                            || dimensions.width != nil || dimensions.height != nil
+                            || dimensions.width != nil || dimensions.height != nil || dimensions.autoHeight
                             || startsHTMLDocument(html) else { continue }
 
                     let fence = Character(UnicodeScalar(UInt8(bitPattern: character)))

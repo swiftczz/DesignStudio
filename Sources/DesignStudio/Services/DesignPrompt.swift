@@ -22,6 +22,8 @@ nonisolated enum DesignPrompt {
            ```
            - Every artboard is a COMPLETE HTML document designed for exactly that width × height. The <body> fills the \
            artboard edge to edge: no device frames, no outer centering, no letterboxing or scaling wrappers.
+           - Scrolling web pages use `height=auto` instead of a number: the artboard grows to the page's full content \
+           height, so all content stays visible. Do not set a fixed height or overflow:hidden on html/body for them.
            - Name artboards in the user's language (e.g. "首页", "详情", "01 封面").
            - When modifying an existing design, output ONLY the artboards you changed or added, reusing the exact \
            existing artboard names; unchanged artboards are kept automatically. Always output the full document of \
@@ -144,7 +146,7 @@ nonisolated enum DesignPrompt {
         } else if !included.isEmpty {
             current += "## 当前设计\n下面是本轮涉及的画板 HTML。只输出改动或新增的画板，沿用原名称：\n\n"
             for a in included {
-                current += "```html artboard=\"\(a.name)\" width=\(Int(a.width)) height=\(Int(a.height))\n\(a.html)\n```\n\n"
+                current += "```html artboard=\"\(a.name)\" width=\(Int(a.width)) height=\(a.autoHeight == true ? "auto" : String(Int(a.height)))\n\(a.html)\n```\n\n"
             }
             let others = artboards.filter { !targetIDs.contains($0.id) }
             if scoped, !others.isEmpty {
