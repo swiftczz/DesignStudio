@@ -79,6 +79,7 @@ nonisolated enum DesignPrompt {
         on the canvas. Give important elements a short data-name attribute in the user's language \
         (e.g. <section data-name="今日推荐">).
         - Preserve existing data-ds-prototype-link attributes on elements that remain after an edit.
+        - Preserve data-ds-component, data-ds-component-instance, and data-ds-component-text on linked components.
         - Allowed external resources: Google Fonts, https://cdn.tailwindcss.com, https://unpkg.com/lucide@latest \
         (icons), https://cdn.jsdelivr.net (small libraries such as Chart.js). Prefer inline SVG for icons and illustrations.
         - Never rely on external photos that may 404; use CSS gradients, SVG illustrations or https://picsum.photos \

@@ -118,7 +118,7 @@ final class AppModel {
 
     func exportProject(_ id: UUID) {
         guard var project = project(id) else { return }
-        project.document = DesignDocument(pages: project.workingDocument.pages)
+        project.document = project.workingDocument
         projectToExport = project
     }
 

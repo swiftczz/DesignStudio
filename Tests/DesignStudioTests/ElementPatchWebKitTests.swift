@@ -5,6 +5,83 @@ import WebKit
 @testable import DesignStudio
 
 struct ElementPatchWebKitTests {
+    @MainActor @Test func componentUpdatesAcrossCanvasesAndPreservesInstanceText() async throws {
+        let folder = try TempWorkspace.make(prefix: "component-instances")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let app = AppModel(persistence: PersistenceController(root: folder))
+        let first = Artboard(name: "源", html: "<button id='open'>默认文案</button>", width: 390, height: 680)
+        let detail = Artboard(name: "详情", html: "<h1>详情</h1>", x: 450, width: 390, height: 680)
+        let second = Artboard(name: "实例", html: "<h1>实例画板</h1>", width: 390, height: 680)
+        let firstPage = DesignPage(name: "第一张", artboards: [first, detail])
+        let secondPage = DesignPage(name: "第二张", artboards: [second])
+        var project = Project(name: "组件测试", kind: .prototype)
+        project.document = DesignDocument(pages: [firstPage, secondPage])
+        app.projects = [project]
+        let session = app.session(for: project.id)
+
+        func installEditor(_ board: Artboard) async throws -> WKWebView {
+            let annotated = HTMLAnnotator.annotate(board.html).html
+            let web = WKWebView(frame: board.frame)
+            let navigation = NavigationWaiter()
+            web.navigationDelegate = navigation
+            await withCheckedContinuation { continuation in
+                navigation.loaded = continuation
+                web.loadHTMLString(annotated, baseURL: ArtboardWebView.baseURL)
+            }
+            _ = try await web.evaluateJavaScript(EditorScript.editor)
+            _ = try await web.callAsyncJavaScript("return window.__ds.init(source, 'select')", arguments: ["source": annotated],
+                                                 in: nil, contentWorld: .page)
+            let handle = session.handle(for: board.id)
+            handle.webView = web
+            handle.isReady = true
+            handle.isInitialized = true
+            handle.loadedSource = board.html
+            return web
+        }
+
+        let sourceWeb = try await installEditor(first)
+        let sourceID = try #require(try await sourceWeb.evaluateJavaScript("+document.querySelector('button').dataset.dsId") as? Int)
+        session.select(CanvasSelection(artboardID: first.id, elementID: sourceID))
+        session.selectedProps = await session.handle(for: first.id).decode(ElementProps.self, "return window.__ds.props(id)", ["id": sourceID])
+        #expect(await session.linkSelectedElement(to: detail.id, on: firstPage.id))
+        let link = try #require(session.document.pages[0].prototype?.links.first)
+        #expect(link.destinationArtboardID == detail.id)
+        let componentID = try #require(await session.createComponent(name: "按钮"))
+        let component = try #require(session.document.components.first)
+        #expect(component.defaultText == "默认文案")
+        #expect(!component.html.contains("data-ds-prototype-link"))
+
+        session.switchPage(secondPage.id)
+        let instanceWeb = try await installEditor(second)
+        #expect(await session.insertComponent(componentID, in: second.id))
+        #expect(await session.overrideComponentText("实例文案"))
+        #expect(await session.insertComponent(componentID, in: second.id))
+        let distinctIDs = try await instanceWeb.evaluateJavaScript("new Set([...document.querySelectorAll('button')].map(b => b.id)).size")
+        #expect(distinctIDs as? Int == 2)
+
+        let insertedID = try #require(session.selection?.elementID)
+        let changed = try #require(await session.handle(for: second.id).decode(EditResult.self,
+            "return window.__ds.setAttr(id, 'title', 'Updated')", ["id": insertedID]))
+        session.handleEditorMessage(EditorMessage(type: "changed", result: changed), from: second.id)
+        #expect(await session.updateComponent(component))
+
+        let working = session.document
+        #expect(working.artboard(first.id)?.html.contains("title=\"Updated\"") == true)
+        #expect(working.artboard(first.id)?.html.contains(link.id.uuidString) == true)
+        #expect(working.pages[0].prototype?.playableLinks(in: working.pages[0].artboards) == [link])
+        #expect(working.artboard(second.id)?.html.contains("实例文案") == true)
+        #expect(working.artboard(second.id)?.html.contains("默认文案") == true)
+        #expect(working.artboard(second.id)?.html.components(separatedBy: "title=\"Updated\"").count == 3)
+
+        project.document = working
+        let url = folder.appending(path: "component.designstudio")
+        try ProjectArchive(project: project, designSystem: nil, includingHistory: false, canvasIDs: [secondPage.id]).write(to: url)
+        let imported = try ProjectArchive.read(from: url).importedCopy(existingDesignSystems: []).project
+        #expect(imported.workingDocument.components.first?.id == componentID)
+        #expect(imported.workingDocument.composedHTML(second.id)?.contains("实例文案") == true)
+        #expect(imported.workingDocument.allArtboards.map(\.id) == [second.id])
+    }
+
     @MainActor @Test func prototypePlaysFromItsStartArtboardAndReturnsAfterNavigation() async throws {
         let id = UUID()
         let start = Artboard(name: "起始", html: "<button data-ds-prototype-link=\"\(id)\">打开详情</button>",

@@ -1200,6 +1200,96 @@ final class ProjectSession {
         }
     }
 
+    // MARK: - 组件
+
+    func createComponent(name: String) async -> UUID? {
+        let name = name.trimmed
+        guard !name.isEmpty, !isGenerating, let selected = selection, let id = selected.elementID,
+              let props = selectedProps, props.id == id, props.componentID == nil,
+              !["html", "head", "body"].contains(props.tag) else { return nil }
+        return await withLoadedArtboard(selected.artboardID) { handle in
+            guard let capture = await handle.decode(ComponentMarkup.Capture.self, ComponentMarkup.capture,
+                                                    ["elementID": id, "defaultText": NSNull()]), !isGenerating else { return nil }
+            let component = ReusableComponent(name: name, html: capture.html, defaultText: capture.text)
+            guard let result = await handle.decode(EditResult.self, "return window.__ds.setAttr(id, name, value)",
+                                                   ["id": id, "name": "data-ds-component", "value": component.id.uuidString]),
+                  result.props?.componentID == component.id, result.source != nil else { return nil }
+            apply(result, artboardID: selected.artboardID) { $0.saveComponent(component) }
+            return component.id
+        }
+    }
+
+    func insertComponent(_ componentID: UUID, in artboardID: UUID) async -> Bool {
+        guard !isGenerating, let component = document.components.first(where: { $0.id == componentID }) else { return false }
+        return await withLoadedArtboard(artboardID) { handle in
+            let args = ["markup": component.html, "componentID": componentID.uuidString, "token": UUID().uuidString]
+            guard let result = await handle.decode(EditResult.self, ComponentMarkup.insert, args),
+                  result.props?.componentID == componentID, result.source != nil else { return false }
+            apply(result, artboardID: artboardID)
+            return true
+        } ?? false
+    }
+
+    func overrideComponentText(_ value: String?) async -> Bool {
+        guard !isGenerating, let selection, let id = selection.elementID, let props = selectedProps,
+              props.id == id, let rootID = props.componentRootElementID,
+              let component = document.components.first(where: { $0.id == props.componentID }),
+              let defaultText = component.defaultText, value?.trimmed.isEmpty != true else { return false }
+        return await withLoadedArtboard(selection.artboardID) { handle in
+            guard let result = await handle.decode(EditResult.self, "return window.__ds.setComponentText(id, value, original)",
+                                                   ["id": rootID, "value": value as Any? ?? NSNull(), "original": defaultText]),
+                  result.source != nil else { return false }
+            apply(result, artboardID: selection.artboardID)
+            return true
+        } ?? false
+    }
+
+    func updateComponent(_ component: ReusableComponent) async -> Bool {
+        guard !isGenerating, let selection, let id = selection.elementID, let props = selectedProps,
+              props.id == id, props.componentID == component.id, let rootID = props.componentRootElementID,
+              document.components.contains(where: { $0.id == component.id }) else { return false }
+        return await withLoadedArtboard(selection.artboardID) { handle in
+            let baseline = document
+            let args = ["elementID": rootID, "defaultText": component.defaultText as Any? ?? NSNull()] as [String: Any]
+            guard let capture = await handle.decode(ComponentMarkup.Capture.self, ComponentMarkup.capture, args),
+                  document == baseline, !isGenerating else { return false }
+            var updated = component
+            updated.html = capture.html
+            updated.defaultText = capture.text
+            return await rewriteComponent(component, replacingWith: updated, using: handle, baseline: baseline)
+        } ?? false
+    }
+
+    func removeComponent(_ component: ReusableComponent, using artboardID: UUID?) async -> Bool {
+        guard !isGenerating, document.components.contains(where: { $0.id == component.id }) else { return false }
+        if !document.allArtboards.contains(where: component.isReferenced) {
+            commit { $0.removeComponent(component.id) }
+            return true
+        }
+        guard let artboardID else { return false }
+        return await withLoadedArtboard(artboardID) { handle in
+            await rewriteComponent(component, replacingWith: nil, using: handle, baseline: document)
+        } ?? false
+    }
+
+    private func rewriteComponent(_ original: ReusableComponent, replacingWith replacement: ReusableComponent?,
+                                  using handle: ArtboardHandle, baseline: DesignDocument) async -> Bool {
+        let boards = baseline.allArtboards.filter { original.isReferenced(by: $0) }
+        let args: [String: Any] = ["documents": boards.map(\.html), "componentID": original.id.uuidString,
+                                   "markup": replacement?.html as Any? ?? NSNull()]
+        guard let revised = await handle.decode([String].self, ComponentMarkup.rewrite, args),
+              revised.count == boards.count, baseline == document, !isGenerating else { return false }
+        commit { doc in
+            for (board, html) in zip(boards, revised) where board.html != html {
+                doc.updateArtboard(board.id) { $0.html = html }
+            }
+            if let replacement { doc.saveComponent(replacement) }
+            else { doc.removeComponent(original.id) }
+        }
+        if let selection { select(CanvasSelection(artboardID: selection.artboardID, elementID: nil)) }
+        return true
+    }
+
     // MARK: - 原型
 
     func setPrototypeStart(_ id: UUID, on pageID: UUID) {

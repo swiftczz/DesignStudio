@@ -158,6 +158,9 @@ nonisolated struct ElementProps: Codable, Hashable, Sendable {
     /// 用「编组」创建的容器（可以取消编组）
     var isGroup: Bool?
     var prototypeLinkID: UUID?
+    var componentID: UUID?
+    var componentRootElementID: Int?
+    var componentTextOverride: String?
 
     func css(_ key: String) -> String { style[key] ?? "" }
     func inlineCSS(_ key: String) -> String { inline[key] ?? "" }

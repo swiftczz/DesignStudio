@@ -348,13 +348,16 @@ nonisolated enum EditorScript {
         KEYS.forEach(function(k){ style[k] = cs.getPropertyValue(k); });
         var inline = {};
         for (var i = 0; i < s.style.length; i++) { var k = s.style[i]; inline[k] = s.style.getPropertyValue(k); }
+        var component = s.closest('[data-ds-component]');
         return { id: id, tag: el.tagName.toLowerCase(), kind: kindOf(el),
                  name: s.getAttribute('data-name') || '',
                  text: isTextLeaf(el) ? (s.textContent || '') : null,
                  rect: rectOf(el), style: style, inline: inline,
                  src: el.getAttribute('src') || '', href: el.getAttribute('href') || '',
                  selector: selectorFor(el), parentId: idOf(el.parentElement), childCount: el.children.length,
-                 isGroup: isGroup(el), prototypeLinkID: s.getAttribute('data-ds-prototype-link') };
+                 isGroup: isGroup(el), prototypeLinkID: s.getAttribute('data-ds-prototype-link'),
+                 componentID: component?.getAttribute('data-ds-component'), componentRootElementID: idOf(component),
+                 componentTextOverride: component?.getAttribute('data-ds-component-text') };
       }
 
       function serialize(){ return src ? '<!DOCTYPE html>\n' + src.documentElement.outerHTML : null; }
@@ -838,6 +841,25 @@ nonisolated enum EditorScript {
         setText: function(id, text){ both(id, function(el){ el.textContent = text; }); return result(id, true); },
         setAttr: function(id, name, value){
           both(id, function(el){ if (value === '' || value == null) el.removeAttribute(name); else el.setAttribute(name, value); });
+          return result(id, true);
+        },
+        setComponentText: function(id, value, defaultText){
+          var a = live(id), b = srcEl(id);
+          function firstText(el){
+            if (!el || !el.hasAttribute('data-ds-component')) return null;
+            var walker = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT), node;
+            while ((node = walker.nextNode())) {
+              if (node.data.trim() && !node.parentElement.closest('style,script,template,svg')) return node;
+            }
+            return null;
+          }
+          var liveText = firstText(a), sourceText = firstText(b);
+          if (!liveText || !sourceText) return null;
+          liveText.data = sourceText.data = value === null ? defaultText : value;
+          [a, b].forEach(function(el){
+            if (value === null) el.removeAttribute('data-ds-component-text');
+            else el.setAttribute('data-ds-component-text', value);
+          });
           return result(id, true);
         },
         // 编组：把一个或多个元素（按文档顺序）放进 display:contents 的容器，不改变原来的布局

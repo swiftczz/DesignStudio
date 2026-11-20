@@ -8,6 +8,7 @@ struct ProjectWorkspaceView: View {
     @State private var batchExport: CanvasExportJob?
     @State private var comparedVersion: DesignVersion?
     @State private var showsPrototype = false
+    @State private var showsComponents = false
     @State private var loadsWebContent = false
     /// 对话栏宽度：拖动分隔线调整，所有项目共用并记住
     @AppStorage("chatPanelWidth") private var chatWidth: Double = ChatPanelDivider.defaultWidth
@@ -49,6 +50,9 @@ struct ProjectWorkspaceView: View {
         }
         .sheet(isPresented: $showsPrototype) {
             PrototypeEditor(session: session)
+        }
+        .sheet(isPresented: $showsComponents) {
+            ComponentLibraryEditor(session: session)
         }
         .inspector(isPresented: $session.showInspector) {
             InspectorView(session: session)
@@ -111,6 +115,10 @@ struct ProjectWorkspaceView: View {
             }
             .help("设置画板连线并演示原型")
             .disabled(session.currentPage?.artboards.isEmpty != false)
+            Button { showsComponents = true } label: {
+                Label("组件", systemImage: "square.on.square")
+            }
+            .help("创建、插入和更新项目组件")
             ExportMenu(session: session) { batchExport = $0 }
         }
 
