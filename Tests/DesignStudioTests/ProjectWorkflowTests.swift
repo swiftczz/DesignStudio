@@ -5,6 +5,40 @@ import Testing
 
 @MainActor
 struct ProjectWorkflowTests {
+    @Test(arguments: [1, 10, 30])
+    func canvasLoadsVisibleArtboardsAndRetainsOnlyNearbyOrRequestedViews(_ count: Int) {
+        let boards = (0..<count).map { index in
+            Artboard(name: "Board \(index)", html: "<p>Board</p>", x: Double(index) * 500, width: 400, height: 300)
+        }
+        let viewport = CGRect(x: 0, y: 0, width: 450, height: 500)
+        let initial = CanvasArtboardLoadPlan(boards: boards, viewport: viewport, zoom: 1, required: []) { _ in false }
+        #expect(initial.visible == Set(boards.prefix(1).map(\.id)))
+        #expect(initial.mountOrder == boards.prefix(2).map(\.id))
+        #expect(initial.retained == Set(boards.prefix(2).map(\.id)))
+
+        let panned = viewport.offsetBy(dx: 700, dy: 0)
+        let scrolled = CanvasArtboardLoadPlan(boards: boards, viewport: panned, zoom: 1, required: []) { _ in false }
+        #expect(scrolled.visible == Set(boards.dropFirst().prefix(2).map(\.id)))
+        #expect(!scrolled.retained.contains(boards[0].id))
+
+        let pinned = CanvasArtboardLoadPlan(boards: boards, viewport: viewport, zoom: 1,
+                                           required: [boards[count - 1].id]) { _ in true }
+        #expect(pinned.visible == initial.visible)
+        #expect(pinned.mountOrder == [boards[count - 1].id])
+        #expect(pinned.retained == [boards[count - 1].id])
+    }
+
+    @Test func canvasPrefetchAndReleaseMarginsStayStableAtDifferentZooms() {
+        let board = Artboard(name: "Edge", html: "<p>Board</p>", x: 900, width: 400, height: 300)
+        let viewport = CGRect(x: 0, y: 0, width: 800, height: 800)
+        let second = CanvasArtboardLoadPlan(boards: [board], viewport: viewport, zoom: 2, required: []) { _ in false }
+        #expect(second.mountOrder.isEmpty)
+        #expect(second.retained == [board.id])
+        let panned = CanvasArtboardLoadPlan(boards: [board], viewport: viewport.offsetBy(dx: 60, dy: 0),
+                                             zoom: 2, required: []) { _ in false }
+        #expect(panned.mountOrder == [board.id])
+    }
+
     @Test func automaticArtboardMeasurementDoesNotReorderProjects() throws {
         let folder = try TempWorkspace.make(prefix: "project-measurement")
         defer { try? FileManager.default.removeItem(at: folder) }

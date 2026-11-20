@@ -136,6 +136,7 @@ final class ArtboardHandle {
     /// 当前网页加载的源码（干净版本）；与文档中的 html 不同时会重新加载
     var loadedSource: String?
     var isReady = false
+    var isInitialized = false
     var mode: EditorMode = .select
 
     init(artboardID: UUID) {
@@ -195,11 +196,13 @@ struct ArtboardWebView: NSViewRepresentable {
     let mode: EditorMode
     let selectedElementIDs: [Int]
     let session: ProjectSession
+    let onReady: () -> Void
 
     static let baseURL = URL(string: "https://canvas.designstudio.local/")!
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(handle: session.handle(for: artboard.id), session: session, selectedElementIDs: selectedElementIDs)
+        Coordinator(handle: session.handle(for: artboard.id), session: session,
+                    selectedElementIDs: selectedElementIDs, onReady: onReady)
     }
 
     func makeNSView(context: Context) -> ArtboardViewport {
@@ -278,9 +281,11 @@ struct ArtboardWebView: NSViewRepresentable {
         web.configuration.userContentController.removeScriptMessageHandler(forName: "ds")
         web.navigationDelegate = nil
         coordinator.cancelPreparation()
+        web.stopLoading()
         if coordinator.handle.webView === web {
             coordinator.handle.webView = nil
             coordinator.handle.isReady = false
+            coordinator.handle.isInitialized = false
         }
     }
 
@@ -297,6 +302,7 @@ struct ArtboardWebView: NSViewRepresentable {
         }
 
         let handle: ArtboardHandle
+        let onReady: () -> Void
         weak var session: ProjectSession?
         private var annotated = ""
         private var initialized = false
@@ -307,10 +313,11 @@ struct ArtboardWebView: NSViewRepresentable {
         var fit = ArtboardFit(on: false, viewportHeight: 900)
         var sharedCSS = ""
 
-        init(handle: ArtboardHandle, session: ProjectSession, selectedElementIDs: [Int]) {
+        init(handle: ArtboardHandle, session: ProjectSession, selectedElementIDs: [Int], onReady: @escaping () -> Void) {
             self.handle = handle
             self.session = session
             self.selectedElementIDs = selectedElementIDs
+            self.onReady = onReady
         }
 
         func applyFit() {
@@ -327,6 +334,7 @@ struct ArtboardWebView: NSViewRepresentable {
             cancelPreparation()
             handle.loadedSource = html
             handle.isReady = false
+            handle.isInitialized = false
             initialized = false
             let key = handle.artboardID as NSUUID
             if let markup = Self.markupCache.object(forKey: key), markup.source == html {
@@ -386,7 +394,9 @@ struct ArtboardWebView: NSViewRepresentable {
                     json.flatMap { try? JSONDecoder().decode(InitResult.self, from: Data($0.utf8)).tree } ?? []
                 }.value
                 guard self.navigation === navigation else { return }
+                self.handle.isInitialized = json != nil
                 self.session?.artboardDidLoad(id, tree: tree)
+                self.onReady()
             }
         }
 

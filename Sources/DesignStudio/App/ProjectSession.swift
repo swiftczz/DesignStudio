@@ -83,6 +83,13 @@ final class ProjectSession {
     var lastUsage: (input: Int, output: Int)?
 
     @ObservationIgnored private var handles: [UUID: ArtboardHandle] = [:]
+    private var artboardLoadRequests: [UUID: Int] = [:]
+    private static let artboardPreviews: NSCache<NSUUID, CanvasArtboardPreview> = {
+        let cache = NSCache<NSUUID, CanvasArtboardPreview>()
+        cache.countLimit = 96
+        cache.totalCostLimit = 32 * 1024 * 1024
+        return cache
+    }()
     @ObservationIgnored private var undoStack: [DesignDocument] = []
     @ObservationIgnored private var redoStack: [DesignDocument] = []
     @ObservationIgnored private var task: Task<Void, Never>?
@@ -181,6 +188,55 @@ final class ProjectSession {
         let h = ArtboardHandle(artboardID: artboardID)
         handles[artboardID] = h
         return h
+    }
+
+    var requiredLiveArtboards: Set<UUID> {
+        var ids = Set(artboardLoadRequests.keys)
+        if let selection { ids.insert(selection.artboardID) }
+        if let previewArtboardID, !previewShowsAll { ids.insert(previewArtboardID) }
+        if isGenerating, let generationElement { ids.insert(generationElement.selection.artboardID) }
+        return ids
+    }
+
+    private func withLoadedArtboard<T>(_ id: UUID,
+                                       perform: (ArtboardHandle) async throws -> T?) async rethrows -> T? {
+        guard !Task.isCancelled, currentPage?.artboards.contains(where: { $0.id == id }) == true else { return nil }
+        artboardLoadRequests[id, default: 0] += 1
+        defer {
+            let remaining = artboardLoadRequests[id, default: 1] - 1
+            artboardLoadRequests[id] = remaining > 0 ? remaining : nil
+        }
+        let handle = handle(for: id)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !handle.isInitialized {
+            guard ContinuousClock.now < deadline,
+                  currentPage?.artboards.contains(where: { $0.id == id }) == true else { return nil }
+            do { try await Task.sleep(for: .milliseconds(20)) } catch { return nil }
+        }
+        return try await perform(handle)
+    }
+
+    func cachedArtboardPreview(_ board: Artboard, sharedCSS: String?) -> NSImage? {
+        guard let cached = Self.artboardPreviews.object(forKey: board.id as NSUUID),
+              cached.matches(board, sharedCSS: sharedCSS) else { return nil }
+        return cached.image
+    }
+
+    func captureArtboardPreview(_ id: UUID) async {
+        guard !isGenerating, !interactivePreview, tweakValues.isEmpty, let page = currentPage,
+              let board = page.artboards.first(where: { $0.id == id }),
+              board.width > 0, board.height > 0,
+              cachedArtboardPreview(board, sharedCSS: page.sharedCSS) == nil,
+              let handle = handles[id], handle.isInitialized, handle.loadedSource == board.html,
+              let web = handle.webView, !web.isLoading else { return }
+        let width = min(board.width, 360 * (board.width / max(board.width, board.height)))
+        guard let image = await handle.snapshot(width: max(width, 1)), !Task.isCancelled,
+              handle.webView === web, handle.isInitialized, handle.loadedSource == board.html,
+              !isGenerating, !interactivePreview, tweakValues.isEmpty, let latest = currentPage, latest.id == page.id,
+              let current = latest.artboards.first(where: { $0.id == id }) else { return }
+        let preview = CanvasArtboardPreview(image: image, board: board, sharedCSS: page.sharedCSS)
+        guard preview.matches(current, sharedCSS: latest.sharedCSS) else { return }
+        Self.artboardPreviews.setObject(preview, forKey: id as NSUUID, cost: preview.byteCount)
     }
 
     // MARK: - 视口
@@ -511,8 +567,11 @@ final class ProjectSession {
 
     private func edit(_ body: String, _ args: [String: Any], artboardID: UUID) async {
         guard isEditable else { return }
-        guard let r = await handle(for: artboardID).decode(EditResult.self, body, args) else { return }
-        apply(r, artboardID: artboardID)
+        let _: Void? = await withLoadedArtboard(artboardID) { handle in
+            guard let result = await handle.decode(EditResult.self, body, args) else { return nil }
+            apply(result, artboardID: artboardID)
+            return ()
+        }
     }
 
     /// 设置选中元素的 CSS 属性（空字符串表示移除）
@@ -1711,9 +1770,11 @@ final class ProjectSession {
             currentPageID = page.id
         }
         struct Located: Decodable { var id: Int; var rect: ElementRect }
-        if let selector = target.selector,
-           let r = await handle(for: board.id).decode(Located.self, "return window.__ds.locate(s)", ["s": selector]) {
-            return CanvasSelection(artboardID: board.id, elementID: r.id)
+        if let selector = target.selector {
+            let located = await withLoadedArtboard(board.id) {
+                await $0.decode(Located.self, "return window.__ds.locate(s)", ["s": selector])
+            }
+            if let located { return CanvasSelection(artboardID: board.id, elementID: located.id) }
         }
         return CanvasSelection(artboardID: board.id, elementID: nil)
     }
@@ -1787,11 +1848,39 @@ final class ProjectSession {
     }
 
     func snapshot(_ artboard: Artboard) async -> NSImage? {
-        await handle(for: artboard.id).snapshot(width: artboard.width)
+        await withLoadedArtboard(artboard.id) { await $0.snapshot(width: artboard.width) }
     }
 
     func pdf(_ artboard: Artboard) async throws -> Data {
-        try await handle(for: artboard.id).pdf()
+        guard let data = try await withLoadedArtboard(artboard.id, perform: { try await $0.pdf() }) else {
+            throw LLMError.cli("画板尚未加载")
+        }
+        return data
+    }
+}
+
+private final class CanvasArtboardPreview {
+    let image: NSImage
+    private let source: String
+    private let sharedCSS: String?
+    private let size: CGSize
+    private let autoHeight: Bool?
+
+    init(image: NSImage, board: Artboard, sharedCSS: String?) {
+        self.image = image
+        source = board.html
+        self.sharedCSS = sharedCSS
+        size = board.frame.size
+        autoHeight = board.autoHeight
+    }
+
+    func matches(_ board: Artboard, sharedCSS: String?) -> Bool {
+        size == board.frame.size && autoHeight == board.autoHeight && self.sharedCSS == sharedCSS && source == board.html
+    }
+
+    var byteCount: Int {
+        let pixels = image.representations.map { $0.pixelsWide * $0.pixelsHigh }.max() ?? 0
+        return pixels * 4 + source.utf8.count + (sharedCSS?.utf8.count ?? 0)
     }
 }
 

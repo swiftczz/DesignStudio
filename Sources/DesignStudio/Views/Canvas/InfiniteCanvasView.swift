@@ -63,7 +63,19 @@ struct InfiniteCanvasView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let boards = session.currentPage?.artboards ?? []
+            let page = session.currentPage
+            let boards = page?.artboards ?? []
+            let css = page?.sharedCSS
+            let zoom = session.zoom
+            let viewport = CGRect(origin: session.worldPoint(.zero),
+                                  size: CGSize(width: geo.size.width / zoom, height: geo.size.height / zoom))
+            let loading = CanvasArtboardLoadPlan(boards: boards, viewport: viewport, zoom: zoom,
+                                                required: session.requiredLiveArtboards,
+                                                retainsVisitedBoards: session.interactivePreview) { board in
+                !session.interactivePreview && !session.showInspector && session.tweakValues.isEmpty
+                    && max(board.width, board.height) * zoom <= 180
+                    && session.cachedArtboardPreview(board, sharedCSS: css) != nil
+            }
             ZStack(alignment: .topLeading) {
                 CanvasGrid(zoom: session.zoom, pan: session.pan)
                     .contentShape(.rect)
@@ -75,7 +87,8 @@ struct InfiniteCanvasView: View {
 
                 ForEach(boards) { board in
                     ArtboardFrame(artboard: board, session: session, drag: artboardDrag,
-                                  mountsWebView: mountedArtboardIDs.contains(board.id))
+                                  mountsWebView: mountedArtboardIDs.contains(board.id),
+                                  showsPreview: loading.visible.contains(board.id), sharedCSS: css)
                         .zIndex(Double(artboardDrag.isMoving(board.id) ? 1 : 0))
                 }
 
@@ -132,9 +145,9 @@ struct InfiniteCanvasView: View {
             .background(CanvasEventMonitor(session: session))
             .onAppear { session.viewportDidChange(geo.size) }
             .onChange(of: geo.size) { _, size in session.viewportDidChange(size) }
-            .task(id: loadsWebContent ? boards.map(\.id) : []) {
+            .task(id: loadsWebContent ? loading : nil) {
                 guard loadsWebContent else { return }
-                await mountArtboards(boards, viewport: geo.size)
+                await updateArtboards(loading)
             }
         }
         .background(CanvasPalette.background)
@@ -203,22 +216,59 @@ struct InfiniteCanvasView: View {
         }
     }
 
-    private func mountArtboards(_ boards: [Artboard], viewport: CGSize) async {
+    private func updateArtboards(_ plan: CanvasArtboardLoadPlan) async {
         guard !Task.isCancelled else { return }
-        mountedArtboardIDs.formIntersection(boards.map(\.id))
-        let bounds = CGRect(origin: .zero, size: viewport)
-        let remaining = boards.filter { !mountedArtboardIDs.contains($0.id) }
-        let visible = remaining.filter { session.viewRect($0.frame).intersects(bounds) }
-        let visibleIDs = Set(visible.map(\.id))
-        let order = visible + remaining.filter { !visibleIDs.contains($0.id) }
+        mountedArtboardIDs.formIntersection(plan.retained)
+        let order = plan.mountOrder.filter { !mountedArtboardIDs.contains($0) }
 
         for index in stride(from: 0, to: order.count, by: 2) {
             if index > 0 {
                 do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
             }
             guard !Task.isCancelled else { return }
-            mountedArtboardIDs.formUnion(order[index..<min(index + 2, order.count)].map(\.id))
+            mountedArtboardIDs.formUnion(order[index..<min(index + 2, order.count)])
         }
+
+        // Capture one board at a time after the viewport settles, outside the opening frames.
+        do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
+        for id in plan.mountOrder where plan.visible.contains(id) {
+            guard !Task.isCancelled else { return }
+            await session.captureArtboardPreview(id)
+        }
+    }
+}
+
+nonisolated struct CanvasArtboardLoadPlan: Equatable {
+    let visible: Set<UUID>
+    let retained: Set<UUID>
+    let mountOrder: [UUID]
+
+    init(boards: [Artboard], viewport: CGRect, zoom: Double, required: Set<UUID>, retainsVisitedBoards: Bool = false,
+         usesPreview: (Artboard) -> Bool) {
+        // Use a larger release margin so panning back and forth along an edge doesn't reload the page.
+        let nearby = viewport.insetBy(dx: -100 / zoom, dy: -100 / zoom)
+        let keepAlive = viewport.insetBy(dx: -260 / zoom, dy: -260 / zoom)
+        var visible: Set<UUID> = []
+        var retained: Set<UUID> = []
+        var pinned: [UUID] = [], onScreen: [UUID] = [], approaching: [UUID] = []
+        for board in boards {
+            let id = board.id
+            let onViewport = board.frame.intersects(viewport)
+            if onViewport { visible.insert(id) }
+            // Interactive preview keeps form values and other in-page state on visited boards.
+            if retainsVisitedBoards { retained.insert(id) }
+            if required.contains(id) {
+                pinned.append(id)
+                retained.insert(id)
+            } else if board.frame.intersects(keepAlive), !usesPreview(board) {
+                retained.insert(id)
+                if onViewport { onScreen.append(id) }
+                else if board.frame.intersects(nearby) { approaching.append(id) }
+            }
+        }
+        self.visible = visible
+        self.retained = retained
+        mountOrder = pinned + onScreen + approaching
     }
 }
 
@@ -340,9 +390,12 @@ private struct ArtboardFrame: View {
     @Bindable var session: ProjectSession
     let drag: ArtboardDragPreview
     let mountsWebView: Bool
+    let showsPreview: Bool
+    let sharedCSS: String?
     @GestureState private var isDragging = false
     @State private var renaming = false
     @State private var newName = ""
+    @State private var liveReady = false
 
     private let headerHeight: CGFloat = 26
 
@@ -373,11 +426,24 @@ private struct ArtboardFrame: View {
             Group {
                 if mountsWebView {
                     ArtboardWebView(artboard: artboard, zoom: z, mode: session.editorMode(for: artboard.id),
-                                    selectedElementIDs: selectedElementIDs, session: session)
+                                    selectedElementIDs: selectedElementIDs, session: session,
+                                    onReady: { liveReady = true })
                 } else {
                     Color.clear
+                        .contentShape(.rect)
+                        .onTapGesture { session.select(CanvasSelection(artboardID: artboard.id, elementID: nil)) }
+                        .contextMenu { scopeAction }
                 }
             }
+                .overlay {
+                    if showsPreview, !(mountsWebView && liveReady), session.tweakValues.isEmpty,
+                       let image = session.cachedArtboardPreview(artboard, sharedCSS: sharedCSS) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
                 .frame(width: artboard.width * z, height: artboard.height * z)
                 .background(.white)
                 .clipShape(.rect(cornerRadius: 2))
@@ -397,6 +463,9 @@ private struct ArtboardFrame: View {
         .position(x: origin.x + width / 2, y: origin.y - headerHeight + height / 2)
         .onChange(of: isDragging) { _, active in
             if !active { drag.clear(artboard.id) }
+        }
+        .onChange(of: mountsWebView) { _, mounted in
+            if !mounted { liveReady = false }
         }
         .onDisappear { drag.clear(artboard.id) }
     }
