@@ -3,7 +3,7 @@ import AppKit
 
 struct RootView: View {
     @Environment(AppModel.self) private var app
-    @State private var pendingExport: (project: Project, canvasIDs: Set<UUID>, includingHistory: Bool, includingComments: Bool)?
+    @State private var pendingExport: ProjectArchive?
     private let sidebarWidth: CGFloat = 285
 
     var body: some View {
@@ -41,8 +41,8 @@ struct RootView: View {
             }
         }
         .sheet(item: $app.projectToExport, onDismiss: savePendingExport) { project in
-            ProjectExportOptions(project: project) { ids, includingHistory, includingComments in
-                pendingExport = (project, ids, includingHistory, includingComments)
+            ProjectExportOptions(project: project, designSystem: app.designSystem(for: project.designSystemID)) {
+                pendingExport = $0
             }
         }
     }
@@ -50,8 +50,7 @@ struct RootView: View {
     private func savePendingExport() {
         guard let pending = pendingExport else { return }
         pendingExport = nil
-        app.saveProjectExport(pending.project, canvasIDs: pending.canvasIDs, includingHistory: pending.includingHistory,
-                              includingComments: pending.includingComments)
+        ExportService.exportProject(pending)
     }
 
     /// 正在全屏查看画板的项目

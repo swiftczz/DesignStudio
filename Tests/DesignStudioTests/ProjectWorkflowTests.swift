@@ -5,6 +5,78 @@ import Testing
 
 @MainActor
 struct ProjectWorkflowTests {
+    @Test func compareVersionsAndRestoreOnlyOneArtboardWithHistoricalStyles() throws {
+        let folder = try TempWorkspace.make(prefix: "restore-artboard")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let persistence = PersistenceController(root: folder)
+        let app = AppModel(persistence: persistence)
+        let board = Artboard(name: "计时", html: "<h1>旧版</h1>", width: 390, height: 844)
+        let other = Artboard(name: "日历", html: "<h1>保留</h1>", x: 500, width: 390, height: 844)
+        let removed = Artboard(name: "删除", html: "<p>Removed</p>", x: 1000, width: 390, height: 844)
+        let added = Artboard(name: "新增", html: "<p>Added</p>", x: 1500, width: 390, height: 844)
+        let page = DesignPage(name: "画布", artboards: [board, other, removed], sharedCSS: "body { color: red }")
+        var newer = page
+        newer.artboards[0].html = "<h1>新版</h1>"
+        newer.artboards[0].width = 420
+        newer.artboards = Array(newer.artboards.prefix(2)) + [added]
+        newer.sharedCSS = "body { color: blue }"
+        let oldDocument = DesignDocument(pages: [page])
+        let newDocument = DesignDocument(pages: [newer])
+        let changes = VersionArtboardChange.compare(oldDocument, to: newDocument)
+        #expect(changes.map(\.action) == ["修改", "修改", "新增", "删除"])
+        let snapshot = try #require(changes.first?.before)
+        #expect(snapshot.html.contains("color: red"))
+        #expect(changes.first?.after?.html.contains("color: blue") == true)
+
+        var project = Project(name: "版本", kind: .prototype)
+        project.document = newDocument
+        app.projects = [project]
+        let session = app.session(for: project.id)
+        session.restoreArtboard(snapshot)
+
+        let restored = try #require(session.document.artboard(board.id))
+        #expect(restored.html == board.html && restored.width == board.width)
+        #expect(session.document.composedHTML(board.id)?.contains("color: red") == true)
+        #expect(session.document.composedHTML(board.id)?.contains("color: blue") == false)
+        #expect(session.document.artboard(other.id) == other)
+        #expect(session.document.composedHTML(other.id)?.contains("color: blue") == true)
+        #expect(session.document.artboard(added.id) == added)
+        session.undo()
+        #expect(session.document == newDocument)
+        #expect(persistence.flush())
+    }
+
+    @Test func codexHandoffIncludesDesignAndStartsInTheChosenFolder() throws {
+        let folder = try TempWorkspace.make(prefix: "codex handoff")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let executable = folder.appending(path: "fake 'codex'")
+        try "#!/bin/sh\nprintf '%s\\n' \"$PWD\" \"$@\" > launch-arguments.txt\n"
+            .write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let board = Artboard(name: "首页", html: "<h1>交接</h1>", width: 390, height: 844)
+        let project = Project(name: "交接", kind: .prototype)
+        let launcher = try ExportService.writeHandoff(project: project, artboards: [board], designSystem: nil,
+                                                       tool: .codex, executable: executable.path, to: folder)
+        let brief = try String(contentsOf: folder.appending(path: "HANDOFF.md"), encoding: .utf8)
+        #expect(brief.contains("01-首页.html"))
+        #expect(try String(contentsOf: folder.appending(path: "01-首页.html"), encoding: .utf8) == board.html)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-f", launcher.path]
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+        let arguments = try String(contentsOf: folder.appending(path: "launch-arguments.txt"), encoding: .utf8)
+            .split(whereSeparator: \.isNewline).map(String.init)
+        let workingDirectory = try #require(arguments.first)
+        let actualDirectory = try FileManager.default.attributesOfItem(atPath: workingDirectory)
+        let expectedDirectory = try FileManager.default.attributesOfItem(atPath: folder.path)
+        #expect(actualDirectory[.systemFileNumber] as? NSNumber == expectedDirectory[.systemFileNumber] as? NSNumber)
+        #expect(arguments.dropFirst().prefix(2) == ["-c", #"service_tier="default""#])
+        #expect(arguments.last?.contains("HANDOFF.md") == true)
+    }
+
     @Test(arguments: [1, 10, 30])
     func canvasLoadsVisibleArtboardsAndRetainsOnlyNearbyOrRequestedViews(_ count: Int) {
         let boards = (0..<count).map { index in

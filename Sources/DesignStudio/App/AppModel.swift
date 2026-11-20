@@ -122,17 +122,6 @@ final class AppModel {
         projectToExport = project
     }
 
-    func saveProjectExport(_ project: Project, canvasIDs: Set<UUID>, includingHistory: Bool, includingComments: Bool) {
-        do {
-            let archive = try ProjectArchive(project: project, designSystem: designSystem(for: project.designSystemID),
-                                             includingHistory: includingHistory, canvasIDs: canvasIDs,
-                                             includingComments: includingComments)
-            ExportService.exportProject(archive)
-        } catch {
-            ExportService.presentError("导出项目失败", error)
-        }
-    }
-
     func chooseProjectToImport() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [ProjectArchive.contentType]

@@ -706,13 +706,12 @@ struct ChatComposer: View {
                     }))
             }
         } label: {
-            Label(title, systemImage: "scope")
-                .font(.caption.weight(.medium))
-                .lineLimit(1)
-                .foregroundStyle(selected.isEmpty ? Color.secondary : Theme.accent)
-                .padding(.horizontal, 4)
+            ComposerChipLabel(idleTint: selected.isEmpty ? nil : Theme.accent) {
+                Image(systemName: "scope").accessibilityHidden(true)
+                Text(title)
+            }
         }
-        .menuStyle(.borderlessButton)
+        .composerMenuStyle(fitsContent: false)
         .help(selected.count > 1 ? selected.map(\.name).joined(separator: "、") : title)
         .accessibilityLabel("修改范围")
         .accessibilityValue(title)

@@ -6,6 +6,7 @@ struct ProjectWorkspaceView: View {
     @Environment(AppModel.self) private var app
     @Bindable var session: ProjectSession
     @State private var batchExport: CanvasExportJob?
+    @State private var comparedVersion: DesignVersion?
     @State private var loadsWebContent = false
     /// 对话栏宽度：拖动分隔线调整，所有项目共用并记住
     @AppStorage("chatPanelWidth") private var chatWidth: Double = ChatPanelDivider.defaultWidth
@@ -41,6 +42,9 @@ struct ProjectWorkspaceView: View {
         }
         .sheet(item: $batchExport) { job in
             CanvasExportSheet(job: job)
+        }
+        .sheet(item: $comparedVersion) { version in
+            VersionArtboardComparison(session: session, version: version)
         }
         .inspector(isPresented: $session.showInspector) {
             InspectorView(session: session)
@@ -96,7 +100,7 @@ struct ProjectWorkspaceView: View {
         ToolbarSpacer(.fixed, placement: .primaryAction)
 
         ToolbarItemGroup(placement: .primaryAction) {
-            VersionHistoryButton(session: session)
+            VersionHistoryButton(session: session) { comparedVersion = $0 }
             ProjectSettingsButton(session: session)
             ExportMenu(session: session) { batchExport = $0 }
         }
@@ -118,6 +122,7 @@ struct ProjectWorkspaceView: View {
 
 private struct VersionHistoryButton: View {
     @Bindable var session: ProjectSession
+    let onCompare: (DesignVersion) -> Void
     @State private var shown = false
 
     var body: some View {
@@ -128,7 +133,10 @@ private struct VersionHistoryButton: View {
         }
         .help("版本历史")
         .popover(isPresented: $shown, arrowEdge: .bottom) {
-            VersionHistoryList(session: session)
+            VersionHistoryList(session: session) { version in
+                shown = false
+                DispatchQueue.main.async { onCompare(version) }
+            }
                 .frame(width: 340, height: 420)
         }
     }
@@ -136,6 +144,7 @@ private struct VersionHistoryButton: View {
 
 private struct VersionHistoryList: View {
     @Bindable var session: ProjectSession
+    let onCompare: (DesignVersion) -> Void
 
     var body: some View {
         let versions = (session.project?.versions ?? []).reversed()
@@ -153,40 +162,49 @@ private struct VersionHistoryList: View {
                 ContentUnavailableView("还没有版本", systemImage: "clock",
                                        description: Text("每次 AI 生成都会保存一个版本，可随时恢复。"))
             } else {
-                List {
-                    ForEach(Array(versions)) { v in
-                        let isCurrent = session.project?.currentVersionID == v.id
-                        HStack(alignment: .top, spacing: 10) {
-                            Text("v\(v.number)")
-                                .font(.callout.monospacedDigit().weight(.semibold))
-                                .frame(width: 36, height: 24)
-                                .background(isCurrent ? Theme.accent : Color.secondary.opacity(0.15), in: .rect(cornerRadius: 6))
-                                .foregroundStyle(isCurrent ? .white : .primary)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(v.summary).lineLimit(2).font(.callout)
-                                HStack(spacing: 6) {
-                                    Text(v.createdAt, format: .relative(presentation: .named))
-                                    Text("· \(v.document?.allArtboards.count ?? 1) 个画板")
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(versions)) { v in
+                            let isCurrent = session.project?.currentVersionID == v.id
+                            HStack(alignment: .top, spacing: 10) {
+                                Text("v\(v.number)")
+                                    .font(.callout.monospacedDigit().weight(.semibold))
+                                    .frame(width: 36, height: 24)
+                                    .background(isCurrent ? Theme.accent : Color.secondary.opacity(0.15), in: .rect(cornerRadius: 6))
+                                    .foregroundStyle(isCurrent ? .white : .primary)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(v.summary).lineLimit(2).font(.callout)
+                                    HStack(spacing: 6) {
+                                        Text(v.createdAt, format: .relative(presentation: .named))
+                                        Text("· \(v.document?.allArtboards.count ?? 1) 个画板")
+                                    }
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                                 }
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                Spacer(minLength: 0)
+                                VStack(alignment: .trailing, spacing: 5) {
+                                    Button("画板变更") { onCompare(v) }
+                                        .buttonStyle(.borderless)
+                                    if !isCurrent {
+                                        Button("恢复") { session.restore(v) }
+                                            .buttonStyle(.borderless)
+                                            .disabled(!session.isEditable)
+                                    }
+                                }
+                                .controlSize(.small)
                             }
-                            Spacer(minLength: 0)
-                            if !isCurrent {
-                                Button("恢复") { session.restore(v) }
-                                    .controlSize(.small)
-                                    .disabled(!session.isEditable)
+                            .padding(.vertical, 8)
+                            .contextMenu {
+                                Button("查看画板变更") { onCompare(v) }
+                                Button("恢复到此版本") { session.restore(v) }
+                                Divider()
+                                Button("删除此版本", role: .destructive) { session.deleteVersion(v) }
                             }
-                        }
-                        .padding(.vertical, 3)
-                        .contextMenu {
-                            Button("恢复到此版本") { session.restore(v) }
                             Divider()
-                            Button("删除此版本", role: .destructive) { session.deleteVersion(v) }
                         }
                     }
+                    .padding(.horizontal, 12)
                 }
-                .listStyle(.inset)
             }
         }
     }
@@ -282,11 +300,14 @@ struct ExportMenu: View {
                     }
                 }
                 Divider()
-                Button("交给 Claude Code 实现", systemImage: "hammer") {
-                    let exe = app.providers.first(where: { $0.kind == .claudeCode })?.cliExecutable ?? "claude"
-                    ExportService.handoffToClaudeCode(project: project, artboards: session.document.composedArtboards,
-                                                      designSystem: app.designSystem(for: project.designSystemID),
-                                                      executable: exe)
+                ForEach(ExportService.HandoffTool.allCases, id: \.self) { tool in
+                    Button("交给 \(tool.title) 实现", systemImage: "hammer") {
+                        let exe = app.providers.first(where: { $0.kind == tool.kind })?.cliExecutable
+                            ?? tool.kind.defaultExecutable
+                        ExportService.handoff(project: project, artboards: session.document.composedArtboards,
+                                              designSystem: app.designSystem(for: project.designSystemID),
+                                              tool: tool, executable: exe)
+                    }
                 }
             } else {
                 Text("还没有可导出的设计")

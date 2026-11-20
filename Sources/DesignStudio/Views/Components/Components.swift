@@ -165,6 +165,7 @@ extension View {
 
 /// 输入框里菜单的标签：灰色文字 + 小箭头，悬停时出现浅灰胶囊底
 struct ComposerChipLabel<Content: View>: View {
+    var idleTint: Color? = nil
     @ViewBuilder var content: Content
     @State private var hovering = false
 
@@ -176,7 +177,7 @@ struct ComposerChipLabel<Content: View>: View {
         }
         .font(.callout)
         .lineLimit(1)
-        .foregroundStyle(hovering ? .primary : .secondary)
+        .foregroundStyle(hovering ? Color.primary : idleTint ?? Color.secondary)
         .padding(.horizontal, 9)
         .frame(height: 28)
         .background(Capsule().fill(Color.primary.opacity(hovering ? 0.07 : 0)))
@@ -188,11 +189,11 @@ struct ComposerChipLabel<Content: View>: View {
 
 extension View {
     /// 用于标签是 ComposerChipLabel 的菜单：去掉系统按钮外观和自带箭头
-    func composerMenuStyle() -> some View {
+    func composerMenuStyle(fitsContent: Bool = true) -> some View {
         self.menuStyle(.button)
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
-            .fixedSize()
+            .fixedSize(horizontal: fitsContent, vertical: true)
     }
 }
 

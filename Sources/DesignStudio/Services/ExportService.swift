@@ -182,18 +182,36 @@ enum ExportService {
         NSPasteboard.general.setString(html, forType: .string)
     }
 
-    /// 交接给 Claude Code：每个画板导出为一个 HTML，加上 HANDOFF.md，并在终端里启动 claude
-    static func handoffToClaudeCode(project: Project, artboards: [Artboard], designSystem: DesignSystem?, executable: String) {
+    enum HandoffTool: CaseIterable {
+        case claudeCode, codex
+
+        var kind: ProviderKind { self == .claudeCode ? .claudeCode : .codex }
+        var title: String { self == .claudeCode ? "Claude Code" : "Codex" }
+        var launcherName: String { self == .claudeCode ? "open-in-claude-code.command" : "open-in-codex.command" }
+    }
+
+    static func handoff(project: Project, artboards: [Artboard], designSystem: DesignSystem?,
+                        tool: HandoffTool, executable: String) {
         guard let folder = chooseFolder(named: project.name) else { return }
         do {
-            var files: [String] = []
-            for (i, a) in artboards.enumerated() {
-                let file = String(format: "%02d-", i + 1) + safeFileName(a.name) + ".html"
-                try a.html.write(to: folder.appending(path: file), atomically: true, encoding: .utf8)
-                files.append("- `\(file)` — \(a.name)（\(Int(a.width))×\(Int(a.height))）")
-            }
+            let launcher = try writeHandoff(project: project, artboards: artboards, designSystem: designSystem,
+                                            tool: tool, executable: executable, to: folder)
+            guard NSWorkspace.shared.open(launcher) else { throw LLMError.cli("无法打开终端启动脚本。") }
+        } catch {
+            presentError("交接失败", error)
+        }
+    }
 
-            var md = """
+    static func writeHandoff(project: Project, artboards: [Artboard], designSystem: DesignSystem?,
+                             tool: HandoffTool, executable: String, to folder: URL) throws -> URL {
+        var files: [String] = []
+        for (i, a) in artboards.enumerated() {
+            let file = String(format: "%02d-", i + 1) + safeFileName(a.name) + ".html"
+            try a.html.write(to: folder.appending(path: file), atomically: true, encoding: .utf8)
+            files.append("- `\(file)` — \(a.name)（\(Int(a.width))×\(Int(a.height))）")
+        }
+
+        var md = """
             # 设计交接：\(project.name)
 
             类型：\(project.kind.title)
@@ -212,23 +230,21 @@ enum ExportService {
 
             ## 设计过程中的关键需求
             """
-            let requests = project.messages.filter { $0.role == .user }.suffix(8)
-            for m in requests { md += "\n- " + m.text.replacingOccurrences(of: "\n", with: " ") }
-            if let designSystem { md += "\n\n## 设计系统\n```\n\(designSystem.promptDescription)\n```\n" }
-            try md.write(to: folder.appending(path: "HANDOFF.md"), atomically: true, encoding: .utf8)
+        let requests = project.messages.filter { $0.role == .user }.suffix(8)
+        for m in requests { md += "\n- " + m.text.replacingOccurrences(of: "\n", with: " ") }
+        if let designSystem { md += "\n\n## 设计系统\n```\n\(designSystem.promptDescription)\n```\n" }
+        try md.write(to: folder.appending(path: "HANDOFF.md"), atomically: true, encoding: .utf8)
 
-            let script = """
-            #!/bin/zsh -l
-            cd \(CLIAuthService.shellQuote(folder.path))
-            \(CLIAuthService.shellQuote(executable)) "阅读 HANDOFF.md 和所有画板 HTML，按照交接说明把这个设计实现为生产代码。"
-            """
-            let commandURL = folder.appending(path: "open-in-claude-code.command")
-            try script.write(to: commandURL, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: commandURL.path)
-            NSWorkspace.shared.open(commandURL)
-        } catch {
-            presentError("交接失败", error)
-        }
+        let options = tool == .codex ? #" -c 'service_tier="default"'"# : ""
+        let script = """
+        #!/bin/zsh -l
+        cd -- "${0:A:h}" || exit 1
+        exec \(CLIAuthService.shellQuote(executable))\(options) "阅读 HANDOFF.md 和所有画板 HTML，按照交接说明把这个设计实现为生产代码。"
+        """
+        let commandURL = folder.appending(path: tool.launcherName)
+        try script.write(to: commandURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: commandURL.path)
+        return commandURL
     }
 
     static func presentError(_ title: String, _ error: Error?) {

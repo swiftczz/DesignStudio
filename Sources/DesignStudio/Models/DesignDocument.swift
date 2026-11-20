@@ -15,6 +15,8 @@ nonisolated struct Artboard: Codable, Identifiable, Hashable, Sendable {
     var height: Double
     /// 网页画板：高度跟随页面内容（模型输出 `height=auto`）。nil 时按尺寸判断，见 `fitsContent(in:)`
     var autoHeight: Bool?
+    /// 单张恢复时保留历史共用样式。nil 继承画布样式，空字符串表示历史版本没有共用样式。
+    var sharedCSSOverride: String?
 
     var frame: CGRect { CGRect(x: x, y: y, width: width, height: height) }
 
@@ -47,7 +49,7 @@ nonisolated struct DesignPage: Codable, Identifiable, Hashable, Sendable {
 
     /// 画板带上共用样式后的完整 HTML：导出、拷贝、交接时使用，可以单独打开
     func composedHTML(_ artboard: Artboard) -> String {
-        SharedStyles.compose(artboard.html, css: sharedCSS)
+        SharedStyles.compose(artboard.html, css: artboard.sharedCSSOverride ?? sharedCSS)
     }
 
     /// 所有画板（HTML 已合并共用样式）
@@ -136,7 +138,12 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
 
     /// 画板所在画布的共用样式
     func sharedCSS(for artboardID: UUID) -> String? {
-        pages.first { $0.artboards.contains { $0.id == artboardID } }?.sharedCSS
+        for page in pages {
+            if let board = page.artboards.first(where: { $0.id == artboardID }) {
+                return board.sharedCSSOverride ?? page.sharedCSS
+            }
+        }
+        return nil
     }
 
     /// 画板带上所在画布共用样式后的完整 HTML

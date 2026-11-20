@@ -34,18 +34,23 @@ nonisolated struct ProjectArchive: Codable, Sendable {
         copy.providerID = nil
         copy.model = nil
         copy.effort = nil
-        // History may contain entire snapshots and responses about canvases outside this selection.
-        if !includingHistory || pages.count != document.pages.count {
+        let partial = pages.count != document.pages.count
+        if !includingHistory {
             copy.messages = []
+        } else if partial {
+            copy.messages = Self.canvasConversation(project, document: document, selectedPages: Set(pages.map(\.id)))
+        }
+        // Version snapshots contain all canvases, even if the turn only edited one.
+        if !includingHistory || partial {
             copy.versions = []
             copy.currentVersionID = nil
         }
-        if !(includingComments ?? (includingHistory && pages.count == document.pages.count)) {
+        if !(includingComments ?? (includingHistory && !partial)) {
             copy.comments = []
-            if includingComments == false {
+            if includingComments == false || partial {
                 for index in copy.messages.indices { copy.messages[index].comments = [] }
             }
-        } else if pages.count != document.pages.count {
+        } else if partial {
             let selectedBoards = Set(pages.flatMap(\.artboards).map(\.id))
             let byName = Dictionary(grouping: document.allArtboards, by: \.name)
             copy.comments = copy.comments.filter { comment in
@@ -59,6 +64,50 @@ nonisolated struct ProjectArchive: Codable, Sendable {
         self.version = Self.currentVersion
         self.project = copy
         self.designSystem = designSystem
+    }
+
+    private static func canvasConversation(_ project: Project, document: DesignDocument,
+                                           selectedPages: Set<UUID>) -> [ChatMessage] {
+        var pagesByBoard: [UUID: Set<UUID>] = [:]
+        var pagesByName: [String: Set<UUID>] = [:]
+        for snapshot in [document] + project.versions.compactMap(\.document) {
+            for page in snapshot.pages {
+                for board in page.artboards {
+                    pagesByBoard[board.id, default: []].insert(page.id)
+                    pagesByName[board.name, default: []].insert(page.id)
+                }
+            }
+        }
+        var conversation: [ChatMessage] = []
+        for (user, reply) in zip(project.messages, project.messages.dropFirst()) {
+            guard user.role == .user, reply.role == .assistant, reply.generationInProgress != true else { continue }
+            let comments = user.comments + reply.comments
+            let boardIDs = (user.scopeIDs ?? []).union(reply.scopeIDs ?? [])
+                .union([user.target?.artboardID, reply.target?.artboardID].compactMap { $0 })
+                .union(comments.compactMap(\.artboardID))
+            var evidence = [user.requestPageID, reply.requestPageID].compactMap { $0 }.map { Set([$0]) }
+            evidence += boardIDs.map { pagesByBoard[$0] ?? [] }
+            evidence += comments.filter { $0.artboardID == nil }.map {
+                $0.artboardName.flatMap { pagesByName[$0] } ?? []
+            }
+            guard let first = evidence.first else { continue }
+            let matches = evidence.dropFirst().reduce(first) { $0.intersection($1) }
+            guard matches.count == 1, let pageID = matches.first, selectedPages.contains(pageID) else { continue }
+
+            var request = user
+            request.requestPageID = pageID
+            request.versionID = nil
+            request.recovery = nil
+            var response = reply
+            response.requestPageID = pageID
+            response.versionID = nil
+            response.recovery = nil
+            response.thinking = nil
+            response.text = HTMLExtractor.conversationalText(reply.text)
+            if response.text.trimmed.isEmpty, !reply.text.trimmed.isEmpty { response.text = "已生成画板。" }
+            conversation += [request, response]
+        }
+        return conversation
     }
 
     func write(to url: URL) throws {

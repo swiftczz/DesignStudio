@@ -218,7 +218,7 @@ final class ProjectSession {
 
     func cachedArtboardPreview(_ board: Artboard, sharedCSS: String?) -> NSImage? {
         guard let cached = Self.artboardPreviews.object(forKey: board.id as NSUUID),
-              cached.matches(board, sharedCSS: sharedCSS) else { return nil }
+              cached.matches(board, sharedCSS: board.sharedCSSOverride ?? sharedCSS) else { return nil }
         return cached.image
     }
 
@@ -234,8 +234,8 @@ final class ProjectSession {
               handle.webView === web, handle.isInitialized, handle.loadedSource == board.html,
               !isGenerating, !interactivePreview, tweakValues.isEmpty, let latest = currentPage, latest.id == page.id,
               let current = latest.artboards.first(where: { $0.id == id }) else { return }
-        let preview = CanvasArtboardPreview(image: image, board: board, sharedCSS: page.sharedCSS)
-        guard preview.matches(current, sharedCSS: latest.sharedCSS) else { return }
+        let preview = CanvasArtboardPreview(image: image, board: board, sharedCSS: board.sharedCSSOverride ?? page.sharedCSS)
+        guard preview.matches(current, sharedCSS: current.sharedCSSOverride ?? latest.sharedCSS) else { return }
         Self.artboardPreviews.setObject(preview, forKey: id as NSUUID, cost: preview.byteCount)
     }
 
@@ -1198,9 +1198,66 @@ final class ProjectSession {
 
     // MARK: - 版本
 
+    func versionDocument(_ version: DesignVersion) -> DesignDocument {
+        if let document = version.document { return document }
+        var migrated = DesignDocument.migrated(html: version.html, kind: kind)
+        // Older single-HTML versions have no IDs. Use a single-artboard snapshot when one survives.
+        let reference = ([document] + (project?.versions.compactMap(\.document) ?? []))
+            .first(where: { $0.allArtboards.count == 1 })
+        if let reference, let page = reference.pages.first(where: { !$0.artboards.isEmpty }) {
+            migrated.pages[0].id = page.id
+            migrated.pages[0].name = page.name
+            migrated.pages[0].artboards[0].id = page.artboards[0].id
+        } else {
+            let legacyID = project?.versions.first(where: { $0.document == nil })?.id ?? version.id
+            migrated.pages[0].id = legacyID
+            migrated.pages[0].artboards[0].id = legacyID
+        }
+        return migrated
+    }
+
+    func restoreArtboard(_ snapshot: VersionArtboardSnapshot) {
+        guard isEditable, !isGenerating else { return }
+        let existingPage = document.pages.firstIndex { page in page.artboards.contains { $0.id == snapshot.id } }
+        let originalPage = document.pages.firstIndex { $0.id == snapshot.pageID }
+        let pageIndex = existingPage ?? originalPage
+            ?? document.pages.firstIndex(where: { $0.id == currentPageID }) ?? 0
+        let page = document.pages[pageIndex]
+        let existingIndex = page.artboards.firstIndex { $0.id == snapshot.id }
+        var restored = snapshot.board
+        let historicalCSS = snapshot.sharedCSS?.trimmed ?? ""
+        restored.sharedCSSOverride = historicalCSS == (page.sharedCSS?.trimmed ?? "") ? nil : historicalCSS
+        if let existingIndex {
+            // Keep the destination position when a board has since moved to another canvas.
+            if page.id != snapshot.pageID {
+                restored.x = page.artboards[existingIndex].x
+                restored.y = page.artboards[existingIndex].y
+            }
+        } else if page.id != snapshot.pageID || page.artboards.contains(where: { $0.frame.intersects(restored.frame) }) {
+            let origin = page.nextArtboardOrigin()
+            restored.x = origin.x
+            restored.y = origin.y
+        }
+
+        commit { doc in
+            if let existingIndex { doc.pages[pageIndex].artboards[existingIndex] = restored }
+            else { doc.pages[pageIndex].artboards.append(restored) }
+        }
+        if currentPageID != page.id {
+            currentPageID = page.id
+            draftScopeIDs = []
+        }
+        select(CanvasSelection(artboardID: restored.id, elementID: nil))
+        zoomToSelection()
+    }
+
+    func useCanvasSharedStyles(for id: UUID) {
+        updateArtboard(id) { $0.sharedCSSOverride = nil }
+    }
+
     func restore(_ version: DesignVersion) {
         guard isEditable else { return }
-        let doc = version.document ?? DesignDocument.migrated(html: version.html, kind: kind)
+        let doc = versionDocument(version)
         commit { $0 = doc }
         app.updateProject(projectID) { $0.currentVersionID = version.id }
         currentPageID = document.pages.first?.id

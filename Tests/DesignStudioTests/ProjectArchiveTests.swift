@@ -125,6 +125,49 @@ struct ProjectArchiveTests {
         #expect(archive.project.versions.isEmpty)
     }
 
+    @Test func partialExportKeepsOnlyAttributableConversationAndAttachments() throws {
+        let folder = try TempWorkspace.make(prefix: "scoped-project-archive")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let first = Artboard(name: "首页", html: "<p>可分享</p>", width: 390, height: 844)
+        let other = Artboard(name: "首页", html: "<p>内部设计</p>", width: 390, height: 844)
+        let shared = DesignPage(name: "可分享", artboards: [first])
+        let privatePage = DesignPage(name: "内部", artboards: [other])
+        let document = DesignDocument(pages: [shared, privatePage])
+        let version = DesignVersion(number: 1, document: document, summary: "快照")
+        let attachment = ChatAttachment(filename: "说明.md", mimeType: "text/markdown", data: Data("需求".utf8),
+                                        sourcePath: "/private/review/说明.md")
+        let request = ChatMessage(role: .user, text: "/private/review/说明.md 调整", attachments: [attachment],
+                                  requestPageID: shared.id)
+        let reply = ChatMessage(role: .assistant, text: "已调整。\n\n```html artboard=\"首页\"\n<p>源码</p>\n```",
+                                versionID: version.id, thinking: "内部思考")
+        let legacy = ChatMessage(role: .user, text: "再调整", target: MessageTarget(artboardID: first.id, artboardName: first.name))
+        let legacyReply = ChatMessage(role: .assistant, text: "已完成。")
+        var project = Project(name: "交接", kind: .prototype)
+        project.document = document
+        project.versions = [version]
+        project.currentVersionID = version.id
+        project.messages = [
+            request, reply, legacy, legacyReply,
+            ChatMessage(role: .user, text: "内部对话", requestPageID: privatePage.id),
+            ChatMessage(role: .assistant, text: "内部回复"),
+            ChatMessage(role: .user, text: "混合范围", scopeIDs: [other.id], requestPageID: shared.id),
+            ChatMessage(role: .assistant, text: "混合回复"),
+            ChatMessage(role: .user, text: "归属不明"),
+            ChatMessage(role: .assistant, text: "不明回复")
+        ]
+
+        let url = folder.appending(path: "交接.designstudio")
+        try ProjectArchive(project: project, designSystem: nil, includingHistory: true, canvasIDs: [shared.id]).write(to: url)
+        let exported = try ProjectArchive.read(from: url).importedCopy(existingDesignSystems: []).project
+        #expect(exported.workingDocument.pages == [shared])
+        #expect(exported.messages.map(\.id) == [request.id, reply.id, legacy.id, legacyReply.id])
+        #expect(exported.messages.map(\.text) == ["说明.md 调整", "已调整。", "再调整", "已完成。"])
+        #expect(exported.messages.first?.attachments.first?.documentText == "需求")
+        #expect(exported.messages.first?.attachments.first?.sourcePath == nil)
+        #expect(exported.messages.allSatisfy { $0.requestPageID == shared.id && $0.versionID == nil && $0.thinking == nil })
+        #expect(exported.versions.isEmpty && exported.currentVersionID == nil)
+    }
+
     @Test func resolvesDesignSystemCollisions() throws {
         let system = DesignSystem.blank()
         let archive = try ProjectArchive(project: Project(name: "t", kind: .prototype),

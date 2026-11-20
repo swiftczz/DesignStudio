@@ -466,17 +466,19 @@ final class WeakMessageHandler: NSObject, WKScriptMessageHandler {
     }
 }
 
-/// 只读预览（播放模式）：按原尺寸渲染并缩放适配，页面可正常交互
+/// 只读对比预览：按原尺寸渲染并缩放适配。
 struct PreviewWebView: NSViewRepresentable {
     let html: String
     let zoom: Double
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
         let ucc = WKUserContentController()
         ucc.addUserScript(WKUserScript(source: EditorScript.errorHook, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         config.userContentController = ucc
         let web = CanvasWebView(frame: .zero, configuration: config)
+        web.navigationDelegate = context.coordinator
         web.configurePreviewScaling()
         web.canvasScale = zoom
         web.isInspectable = true
@@ -499,7 +501,11 @@ struct PreviewWebView: NSViewRepresentable {
         CGSize(width: proposal.width ?? 0, height: proposal.height ?? 0)
     }
 
-    final class Coordinator {
+    final class Coordinator: NSObject, WKNavigationDelegate {
         var loaded = ""
+
+        func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
+            action.navigationType == .other ? .allow : .cancel
+        }
     }
 }

@@ -499,6 +499,9 @@ private struct ArtboardFrame: View {
                     Divider()
                     Button("复制画板", systemImage: "plus.square.on.square") { session.duplicateArtboard(artboard.id) }
                     Button("重命名", systemImage: "pencil") { newName = artboard.name; renaming = true }
+                    if artboard.sharedCSSOverride != nil {
+                        Button("使用画布共用样式", systemImage: "paintpalette") { session.useCanvasSharedStyles(for: artboard.id) }
+                    }
                     Button("缩放到此画板", systemImage: "plus.magnifyingglass") {
                         session.select(CanvasSelection(artboardID: artboard.id, elementID: nil))
                         session.zoomToSelection()
