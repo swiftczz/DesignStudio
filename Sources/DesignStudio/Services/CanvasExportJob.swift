@@ -18,6 +18,7 @@ final class CanvasExportJob: Identifiable {
     let format: CanvasExportFormat
     let kind: ProjectKind
     private let sharedCSS: String?
+    private let prototype: CanvasPrototype?
 
     private(set) var completed: Set<Int> = []
     private(set) var failures: [Int: String] = [:]
@@ -30,6 +31,7 @@ final class CanvasExportJob: Identifiable {
         self.name = name
         boards = page.composedArtboards
         sharedCSS = page.sharedCSS
+        prototype = page.prototype
         self.kind = kind
         self.format = format
     }
@@ -77,6 +79,7 @@ final class CanvasExportJob: Identifiable {
         let kind = kind
         let name = name
         let sharedCSS = sharedCSS
+        let prototype = prototype
         let format = format
         try await Task.detached(priority: .userInitiated) {
             let scoped = url.startAccessingSecurityScopedResource()
@@ -95,7 +98,7 @@ final class CanvasExportJob: Identifiable {
                 }
                 try data.write(to: url, options: .atomic)
             case .zip:
-                let bundle = CanvasBundle.make(title: name, artboards: boards, kind: kind)
+                let bundle = CanvasBundle.make(title: name, artboards: boards, kind: kind, prototype: prototype)
                 try ExportService.makeZip(name: name, at: url) { folder in
                     try ExportService.writeCanvasZipContents(to: folder, bundle: bundle, sharedCSS: sharedCSS, boards: ordered)
                 }

@@ -52,6 +52,7 @@ final class ProjectSession {
     var showChat = true
     /// 进入项目时只显示对话栏和画布，检查器按需打开
     var showInspector = false
+    var showsPrototypeLinks = false
     var showAskAI = false
     /// 全屏（专注模式）：当前聚焦的画板；非 nil 即处于全屏
     private(set) var previewArtboardID: UUID?
@@ -547,13 +548,16 @@ final class ProjectSession {
 
     // MARK: - 元素编辑
 
-    private func apply(_ r: EditResult, artboardID: UUID) {
+    private func apply(_ r: EditResult, artboardID: UUID, update: (inout DesignDocument) -> Void = { _ in }) {
         if let tree = r.tree { trees[artboardID] = tree }
         multiSelection = r.multi ?? []
         if let source = r.source {
             let clean = HTMLAnnotator.strip(source)
             handle(for: artboardID).loadedSource = clean   // 网页已是最新状态，不必重新加载
-            commit { $0.updateArtboard(artboardID) { $0.html = clean } }
+            commit {
+                $0.updateArtboard(artboardID) { $0.html = clean }
+                update(&$0)
+            }
         }
         if let id = r.id {
             selection = CanvasSelection(artboardID: artboardID, elementID: id)
@@ -1194,6 +1198,54 @@ final class ProjectSession {
             }
             return false
         }
+    }
+
+    // MARK: - 原型
+
+    func setPrototypeStart(_ id: UUID, on pageID: UUID) {
+        guard !isGenerating, let page = document.pages.first(where: { $0.id == pageID }),
+              page.artboards.contains(where: { $0.id == id }) else { return }
+        updatePrototype(on: pageID) { $0.startArtboardID = id }
+    }
+
+    func deletePrototypeLink(_ id: UUID, on pageID: UUID) {
+        guard !isGenerating else { return }
+        updatePrototype(on: pageID) { $0.links.removeAll { $0.id == id } }
+    }
+
+    private func updatePrototype(on pageID: UUID, _ mutate: (inout CanvasPrototype) -> Void) {
+        guard let index = document.pages.firstIndex(where: { $0.id == pageID }) else { return }
+        commit { doc in
+            var prototype = doc.pages[index].prototype ?? CanvasPrototype()
+            mutate(&prototype)
+            doc.pages[index].prototype = prototype
+        }
+    }
+
+    func linkSelectedElement(to destination: UUID, on pageID: UUID) async -> Bool {
+        guard !isGenerating, let selection, let element = selection.elementID, let props = selectedProps,
+              props.id == element, !["html", "head", "body"].contains(props.tag),
+              let page = document.pages.first(where: { $0.id == pageID }),
+              let source = page.artboards.first(where: { $0.id == selection.artboardID }),
+              destination != source.id, page.artboards.contains(where: { $0.id == destination }) else { return false }
+        let link = PrototypeLink(id: props.prototypeLinkID ?? UUID(), sourceArtboardID: source.id,
+                                 destinationArtboardID: destination, elementName: Self.displayName(props),
+                                 sourceY: min(max((props.rect.y + props.rect.h / 2) / source.height, 0), 1))
+        return await withLoadedArtboard(source.id) { handle in
+            guard let result = await handle.decode(EditResult.self,
+                                                   "return window.__ds.setAttr(id, name, value)",
+                                                   ["id": element, "name": "data-ds-prototype-link", "value": link.id.uuidString]),
+                  result.props?.prototypeLinkID == link.id, result.source != nil, !isGenerating else { return false }
+            apply(result, artboardID: source.id) { doc in
+                guard let index = doc.pages.firstIndex(where: { $0.id == pageID }) else { return }
+                var prototype = doc.pages[index].prototype ?? CanvasPrototype()
+                prototype.links.removeAll { $0.id == link.id }
+                prototype.links.append(link)
+                doc.pages[index].prototype = prototype
+            }
+            showsPrototypeLinks = true
+            return true
+        } ?? false
     }
 
     // MARK: - 版本

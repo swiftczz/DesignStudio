@@ -7,6 +7,7 @@ struct ProjectWorkspaceView: View {
     @Bindable var session: ProjectSession
     @State private var batchExport: CanvasExportJob?
     @State private var comparedVersion: DesignVersion?
+    @State private var showsPrototype = false
     @State private var loadsWebContent = false
     /// 对话栏宽度：拖动分隔线调整，所有项目共用并记住
     @AppStorage("chatPanelWidth") private var chatWidth: Double = ChatPanelDivider.defaultWidth
@@ -45,6 +46,9 @@ struct ProjectWorkspaceView: View {
         }
         .sheet(item: $comparedVersion) { version in
             VersionArtboardComparison(session: session, version: version)
+        }
+        .sheet(isPresented: $showsPrototype) {
+            PrototypeEditor(session: session)
         }
         .inspector(isPresented: $session.showInspector) {
             InspectorView(session: session)
@@ -102,6 +106,11 @@ struct ProjectWorkspaceView: View {
         ToolbarItemGroup(placement: .primaryAction) {
             VersionHistoryButton(session: session) { comparedVersion = $0 }
             ProjectSettingsButton(session: session)
+            Button { showsPrototype = true } label: {
+                Label("原型", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+            }
+            .help("设置画板连线并演示原型")
+            .disabled(session.currentPage?.artboards.isEmpty != false)
             ExportMenu(session: session) { batchExport = $0 }
         }
 
@@ -283,7 +292,7 @@ struct ExportMenu: View {
                 let name = session.document.pages.count > 1 ? "\(project.displayName)-\(page.displayName)" : project.displayName
                 Section("当前画布（\(boards.count) 个画板）") {
                     Button("导出一个 HTML", systemImage: "doc.richtext") {
-                        ExportService.exportCanvasHTML(boards, kind: session.kind, name: name)
+                        ExportService.exportCanvasHTML(boards, kind: session.kind, name: name, prototype: page.prototype)
                     }
                     Button("导出分开的 HTML", systemImage: "folder") {
                         ExportService.exportAllHTML(boards, projectName: name)
@@ -295,7 +304,8 @@ struct ExportMenu: View {
                         startExport(CanvasExportJob(name: name, page: page, kind: session.kind, format: .zip))
                     }
                     Button("在浏览器中打开整个画布", systemImage: "safari") {
-                        ExportService.openInBrowser(CanvasBundle.make(title: name, artboards: boards, kind: session.kind),
+                        ExportService.openInBrowser(CanvasBundle.make(title: name, artboards: boards, kind: session.kind,
+                                                                      prototype: page.prototype),
                                                     name: name)
                     }
                 }

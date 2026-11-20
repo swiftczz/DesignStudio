@@ -60,10 +60,11 @@ enum ExportService {
     }
 
     /// 把整个画布导出为一个 HTML 文件：每个画板放在独立的 iframe 里，浏览器直接打开
-    static func exportCanvasHTML(_ artboards: [Artboard], kind: ProjectKind, name: String) {
+    static func exportCanvasHTML(_ artboards: [Artboard], kind: ProjectKind, name: String, prototype: CanvasPrototype? = nil) {
         guard let url = savePanel(name: name, type: .html) else { return }
         do {
-            try CanvasBundle.make(title: name, artboards: artboards, kind: kind).write(to: url, atomically: true, encoding: .utf8)
+            try CanvasBundle.make(title: name, artboards: artboards, kind: kind, prototype: prototype)
+                .write(to: url, atomically: true, encoding: .utf8)
         } catch {
             presentError("导出失败", error)
         }

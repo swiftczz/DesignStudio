@@ -354,11 +354,16 @@ nonisolated enum EditorScript {
                  rect: rectOf(el), style: style, inline: inline,
                  src: el.getAttribute('src') || '', href: el.getAttribute('href') || '',
                  selector: selectorFor(el), parentId: idOf(el.parentElement), childCount: el.children.length,
-                 isGroup: isGroup(el) };
+                 isGroup: isGroup(el), prototypeLinkID: s.getAttribute('data-ds-prototype-link') };
       }
 
       function serialize(){ return src ? '<!DOCTYPE html>\n' + src.documentElement.outerHTML : null; }
       function both(id, fn){ var a = live(id), b = srcEl(id); if (a) fn(a); if (b) fn(b); }
+      function stripPrototypeLinks(root){
+        if (!root) return;
+        root.removeAttribute('data-ds-prototype-link');
+        root.querySelectorAll('[data-ds-prototype-link]').forEach(function(el){ el.removeAttribute('data-ds-prototype-link'); });
+      }
       function setInlineStyle(el, map){
         Object.keys(map).forEach(function(k){
           var v = map[k];
@@ -812,6 +817,7 @@ nonisolated enum EditorScript {
           var a = live(id), b = srcEl(id);
           var na = fragment(html, document), nb = fragment(html, src || document);
           if (!a || !b || !na || !nb) return result(null, false);
+          [na, nb].forEach(stripPrototypeLinks);
           var nid = stamp(na, nb);
           a.after(na); b.after(nb);
           selectedId = nid;
@@ -875,6 +881,7 @@ nonisolated enum EditorScript {
           var a = live(id), b = srcEl(id);
           if (!a || !b) return result(id, false);
           var ca = a.cloneNode(true), cb = b.cloneNode(true);
+          [ca, cb].forEach(stripPrototypeLinks);
           var nid = stamp(ca, cb);
           a.after(ca); b.after(cb);
           var cs = window.getComputedStyle(ca);
@@ -889,6 +896,7 @@ nonisolated enum EditorScript {
         insert: function(html, x, y){
           var a = fragment(html, document), b = fragment(html, src || document);
           if (!a) return result(null, false);
+          [a, b].forEach(stripPrototypeLinks);
           var nid = stamp(a, b || a.cloneNode(true));
           if (x != null && y != null) {
             [a, b].forEach(function(el){ if (!el) return; el.style.position = 'absolute'; el.style.left = Math.round(x) + 'px'; el.style.top = Math.round(y) + 'px'; });

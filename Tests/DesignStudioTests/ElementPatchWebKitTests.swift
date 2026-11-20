@@ -5,6 +5,39 @@ import WebKit
 @testable import DesignStudio
 
 struct ElementPatchWebKitTests {
+    @MainActor @Test func prototypePlaysFromItsStartArtboardAndReturnsAfterNavigation() async throws {
+        let id = UUID()
+        let start = Artboard(name: "起始", html: "<button data-ds-prototype-link=\"\(id)\">打开详情</button>",
+                            width: 390, height: 680)
+        let destination = Artboard(name: "详情", html: "<h1>详情内容</h1>", width: 390, height: 680)
+        let link = PrototypeLink(id: id, sourceArtboardID: start.id, destinationArtboardID: destination.id,
+                                 elementName: "打开详情", sourceY: 0.5)
+        let prototype = CanvasPrototype(startArtboardID: start.id, links: [link])
+        let page = DesignPage(name: "原型", artboards: [destination, start], prototype: prototype)
+        let document = try JSONDecoder().decode(DesignDocument.self, from: JSONEncoder().encode(DesignDocument(pages: [page])))
+        let copied = try #require(document.pages.first)
+        #expect(copied.prototype == prototype)
+        let html = CanvasBundle.make(title: page.name, artboards: copied.composedArtboards,
+                                     kind: .prototype, prototype: copied.prototype)
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        let navigation = NavigationWaiter()
+        web.navigationDelegate = navigation
+        await withCheckedContinuation { continuation in
+            navigation.loaded = continuation
+            web.loadHTMLString(html, baseURL: ArtboardWebView.baseURL)
+        }
+        let result = try await web.callAsyncJavaScript("""
+            const frame = () => document.querySelector('#view iframe');
+            const button = frame()?.contentDocument?.querySelector('button');
+            const beganAtStart = frame()?.title === '起始' && !!button;
+            button?.click();
+            const navigated = frame()?.title === '详情';
+            document.getElementById('prototype-back').click();
+            return beganAtStart && navigated && frame()?.title === '起始';
+            """, arguments: [:], in: nil, contentWorld: .page)
+        #expect(result as? Bool == true)
+    }
+
     @MainActor @Test func insertsEditableNotesAndStyledPencilStrokes() async throws {
         let html = HTMLAnnotator.annotate("<!doctype html><html><body></body></html>").html
         let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 300, height: 200))
