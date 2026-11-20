@@ -10,9 +10,8 @@ struct ElementPatchWebKitTests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let app = AppModel(persistence: PersistenceController(root: folder))
         let first = Artboard(name: "源", html: "<button id='open'>默认文案</button>", width: 390, height: 680)
-        let detail = Artboard(name: "详情", html: "<h1>详情</h1>", x: 450, width: 390, height: 680)
         let second = Artboard(name: "实例", html: "<h1>实例画板</h1>", width: 390, height: 680)
-        let firstPage = DesignPage(name: "第一张", artboards: [first, detail])
+        let firstPage = DesignPage(name: "第一张", artboards: [first])
         let secondPage = DesignPage(name: "第二张", artboards: [second])
         var project = Project(name: "组件测试", kind: .prototype)
         project.document = DesignDocument(pages: [firstPage, secondPage])
@@ -43,13 +42,9 @@ struct ElementPatchWebKitTests {
         let sourceID = try #require(try await sourceWeb.evaluateJavaScript("+document.querySelector('button').dataset.dsId") as? Int)
         session.select(CanvasSelection(artboardID: first.id, elementID: sourceID))
         session.selectedProps = await session.handle(for: first.id).decode(ElementProps.self, "return window.__ds.props(id)", ["id": sourceID])
-        #expect(await session.linkSelectedElement(to: detail.id, on: firstPage.id))
-        let link = try #require(session.document.pages[0].prototype?.links.first)
-        #expect(link.destinationArtboardID == detail.id)
         let componentID = try #require(await session.createComponent(name: "按钮"))
         let component = try #require(session.document.components.first)
         #expect(component.defaultText == "默认文案")
-        #expect(!component.html.contains("data-ds-prototype-link"))
 
         session.switchPage(secondPage.id)
         let instanceWeb = try await installEditor(second)
@@ -67,8 +62,6 @@ struct ElementPatchWebKitTests {
 
         let working = session.document
         #expect(working.artboard(first.id)?.html.contains("title=\"Updated\"") == true)
-        #expect(working.artboard(first.id)?.html.contains(link.id.uuidString) == true)
-        #expect(working.pages[0].prototype?.playableLinks(in: working.pages[0].artboards) == [link])
         #expect(working.artboard(second.id)?.html.contains("实例文案") == true)
         #expect(working.artboard(second.id)?.html.contains("默认文案") == true)
         #expect(working.artboard(second.id)?.html.components(separatedBy: "title=\"Updated\"").count == 3)
@@ -80,39 +73,6 @@ struct ElementPatchWebKitTests {
         #expect(imported.workingDocument.components.first?.id == componentID)
         #expect(imported.workingDocument.composedHTML(second.id)?.contains("实例文案") == true)
         #expect(imported.workingDocument.allArtboards.map(\.id) == [second.id])
-    }
-
-    @MainActor @Test func prototypePlaysFromItsStartArtboardAndReturnsAfterNavigation() async throws {
-        let id = UUID()
-        let start = Artboard(name: "起始", html: "<button data-ds-prototype-link=\"\(id)\">打开详情</button>",
-                            width: 390, height: 680)
-        let destination = Artboard(name: "详情", html: "<h1>详情内容</h1>", width: 390, height: 680)
-        let link = PrototypeLink(id: id, sourceArtboardID: start.id, destinationArtboardID: destination.id,
-                                 elementName: "打开详情", sourceY: 0.5)
-        let prototype = CanvasPrototype(startArtboardID: start.id, links: [link])
-        let page = DesignPage(name: "原型", artboards: [destination, start], prototype: prototype)
-        let document = try JSONDecoder().decode(DesignDocument.self, from: JSONEncoder().encode(DesignDocument(pages: [page])))
-        let copied = try #require(document.pages.first)
-        #expect(copied.prototype == prototype)
-        let html = CanvasBundle.make(title: page.name, artboards: copied.composedArtboards,
-                                     kind: .prototype, prototype: copied.prototype)
-        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
-        let navigation = NavigationWaiter()
-        web.navigationDelegate = navigation
-        await withCheckedContinuation { continuation in
-            navigation.loaded = continuation
-            web.loadHTMLString(html, baseURL: ArtboardWebView.baseURL)
-        }
-        let result = try await web.callAsyncJavaScript("""
-            const frame = () => document.querySelector('#view iframe');
-            const button = frame()?.contentDocument?.querySelector('button');
-            const beganAtStart = frame()?.title === '起始' && !!button;
-            button?.click();
-            const navigated = frame()?.title === '详情';
-            document.getElementById('prototype-back').click();
-            return beganAtStart && navigated && frame()?.title === '起始';
-            """, arguments: [:], in: nil, contentWorld: .page)
-        #expect(result as? Bool == true)
     }
 
     @MainActor @Test func insertsEditableNotesAndStyledPencilStrokes() async throws {
@@ -366,6 +326,22 @@ struct ArtboardAutoHeightTests {
 }
 
 struct CanvasBundleTests {
+    @Test func opensCanvasesSavedWithPrototypeMetadata() throws {
+        let start = Artboard(name: "首页", html: #"<button data-ds-prototype-link="old">打开详情</button>"#,
+                            width: 390, height: 680)
+        let destination = Artboard(name: "详情", html: "<h1>详情</h1>", width: 390, height: 680)
+        let page = DesignPage(name: "画布", artboards: [start, destination])
+        let encoded = try JSONEncoder().encode(page)
+        var savedPage = try #require(try JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        savedPage["prototype"] = ["startArtboardID": destination.id.uuidString, "links": []]
+
+        let restored = try JSONDecoder().decode(DesignPage.self, from: JSONSerialization.data(withJSONObject: savedPage))
+        #expect(restored == page)
+        let html = CanvasBundle.make(title: restored.name, artboards: restored.composedArtboards, kind: .prototype)
+        #expect(html.contains(#""mode":"canvas""#))
+        #expect(!html.contains("wirePrototype"))
+    }
+
     @Test func bundlesEveryArtboardAsIsolatedDocument() throws {
         let boards = [
             Artboard(name: "首页", html: "<!DOCTYPE html><html><body><script>var a = '</script>';</script><!-- x --></body></html>",

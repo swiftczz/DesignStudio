@@ -9,7 +9,6 @@ import Foundation
 /// 网页画板（高度随内容）在 iframe 里同样把 vh 固定为一屏，并按整页内容设置高度。
 nonisolated enum CanvasBundle {
     private struct Board: Encodable {
-        var id: UUID
         var name: String
         var html: String
         var x: Double
@@ -24,19 +23,14 @@ nonisolated enum CanvasBundle {
         var title: String
         var mode: String
         var boards: [Board]
-        var prototype: CanvasPrototype?
     }
 
-    static func make(title: String, artboards: [Artboard], kind: ProjectKind, prototype: CanvasPrototype? = nil) -> String {
+    static func make(title: String, artboards: [Artboard], kind: ProjectKind) -> String {
         let boards = artboards.map {
-            Board(id: $0.id, name: $0.name, html: $0.html, x: $0.x, y: $0.y, w: $0.width, h: $0.height,
+            Board(name: $0.name, html: $0.html, x: $0.x, y: $0.y, w: $0.width, h: $0.height,
                   auto: $0.fitsContent(in: kind), vh: $0.viewportHeight)
         }
-        let playable = prototype.map {
-            CanvasPrototype(startArtboardID: $0.startArtboardID, links: $0.playableLinks(in: artboards))
-        }
-        let payload = Payload(title: title, mode: kind == .slides || prototype != nil ? "single" : "canvas",
-                              boards: boards, prototype: playable)
+        let payload = Payload(title: title, mode: kind == .slides ? "single" : "canvas", boards: boards)
         let json = (try? JSONEncoder().encode(payload)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         // 放进 <script> 里的数据不能出现 </script> 或 <!--：JSON 字符串里的 < 全部转义
         let data = json.replacingOccurrences(of: "<", with: "\\u003c")
@@ -111,7 +105,6 @@ nonisolated enum CanvasBundle {
         <button class="tool" id="zoom-in" title="放大">+</button>
       </div>
       <div class="tools" id="single-tools">
-        <button class="tool" id="prototype-back" hidden>返回</button>
         <button class="tool" id="prev" title="上一个（←）">‹</button>
         <span class="muted" id="pos"></span>
         <button class="tool" id="next" title="下一个（→）">›</button>
@@ -128,8 +121,6 @@ nonisolated enum CanvasBundle {
     (function(){
       var data = JSON.parse(document.getElementById('ds-data').textContent);
       var boards = data.boards || [];
-      var prototype = data.prototype;
-      var journey = [];
       var $ = function(id){ return document.getElementById(id); };
       $('title').textContent = data.title;
       $('count').textContent = boards.length + ' 个画板';
@@ -177,28 +168,8 @@ nonisolated enum CanvasBundle {
         frame.appendChild(f);
         var st = { b: b, frame: frame, iframe: f, h: b.h, scale: 1 };
         if (b.auto) f.addEventListener('load', function(){ fitContent(st, onHeight); });
-        if (prototype && prototype.links.length) f.addEventListener('load', function(){ wirePrototype(st); });
         f.srcdoc = b.html;
         return st;
-      }
-      function wirePrototype(st){
-        var doc = st.iframe.contentDocument;
-        if (!doc) return;
-        var links = new Map(prototype.links.filter(function(link){
-          return link.sourceArtboardID === st.b.id;
-        }).map(function(link){ return [link.id, link.destinationArtboardID]; }));
-        if (!links.size) return;
-        doc.addEventListener('click', function(event){
-          var element = event.target.closest && event.target.closest('[data-ds-prototype-link]');
-          if (!element) return;
-          var target = links.get(element.getAttribute('data-ds-prototype-link'));
-          var next = boards.findIndex(function(board){ return board.id === target; });
-          if (next < 0) return;
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          journey.push(boards.findIndex(function(board){ return board.id === st.b.id; }));
-          show('single', next);
-        }, true);
       }
       function fitContent(st, onHeight){
         var doc, win;
@@ -329,7 +300,6 @@ nonisolated enum CanvasBundle {
       }
       $('prev').onclick = function(){ show('single', current - 1); };
       $('next').onclick = function(){ show('single', current + 1); };
-      $('prototype-back').onclick = function(){ if (journey.length) show('single', journey.pop()); };
 
       // ---------- 切换 ----------
       var mode = null;
@@ -338,14 +308,13 @@ nonisolated enum CanvasBundle {
         document.body.classList.toggle('single', m === 'single');
         $('mode-canvas').setAttribute('aria-pressed', String(m === 'canvas'));
         $('mode-single').setAttribute('aria-pressed', String(m === 'single'));
-        $('prototype-back').hidden = !journey.length;
         if (m === 'single') {
           showSingle(i == null ? current : i);
-          try { history.replaceState(null, '', '#' + (current + 1)); } catch(e) {}
+          history.replaceState(null, '', '#' + (current + 1));
         } else {
           buildCanvas();
           if (!fitted) { fitted = true; fitZoom(); } else layout();
-          try { history.replaceState(null, '', location.pathname + location.search); } catch(e) {}
+          history.replaceState(null, '', location.pathname + location.search);
         }
       }
       $('mode-canvas').onclick = function(){ show('canvas'); };
@@ -359,9 +328,8 @@ nonisolated enum CanvasBundle {
 
       if (!boards.length) { $('count').textContent = '没有画板'; return; }
       var hash = parseInt(location.hash.slice(1), 10);
-      var start = prototype ? boards.findIndex(function(b){ return b.id === prototype.startArtboardID; }) : 0;
       if (hash >= 1 && hash <= boards.length) show('single', hash - 1);
-      else show(data.mode === 'single' ? 'single' : 'canvas', Math.max(0, start));
+      else show(data.mode === 'single' ? 'single' : 'canvas', 0);
     })();
     </script>
     </body>

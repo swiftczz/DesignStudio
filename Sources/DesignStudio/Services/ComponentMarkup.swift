@@ -9,7 +9,7 @@ nonisolated enum ComponentMarkup {
 
     private static let helpers = #"""
     const componentAttr = 'data-ds-component', textAttr = 'data-ds-component-text';
-    const instanceAttr = 'data-ds-component-instance', linkAttr = 'data-ds-prototype-link';
+    const instanceAttr = 'data-ds-component-instance';
     const placement = ['position','top','right','bottom','left','inset','z-index','order','grid-area',
                        'align-self','justify-self','translate','margin-top','margin-right','margin-bottom','margin-left'];
     function element(html, doc = document) {
@@ -72,7 +72,6 @@ nonisolated enum ComponentMarkup {
     root.removeAttribute(componentAttr);
     root.removeAttribute(textAttr);
     root.removeAttribute(instanceAttr);
-    [root, ...root.querySelectorAll('[' + linkAttr + ']')].forEach(node => node.removeAttribute(linkAttr));
     placement.forEach(key => root.style.removeProperty(key));
     return JSON.stringify({html: root.outerHTML, text: text?.data ?? null});
     """#
@@ -85,13 +84,6 @@ nonisolated enum ComponentMarkup {
 
     static let rewrite = helpers + #"""
 
-    function preserveLinks(previous, next) {
-      if (previous.tagName !== next.tagName) return;
-      const link = previous.getAttribute(linkAttr);
-      if (link) next.setAttribute(linkAttr, link);
-      for (let i = 0; i < Math.min(previous.children.length, next.children.length); i++)
-        preserveLinks(previous.children[i], next.children[i]);
-    }
     return JSON.stringify(documents.map(html => {
       const doc = new DOMParser().parseFromString(html, 'text/html');
       let changed = false;
@@ -112,7 +104,6 @@ nonisolated enum ComponentMarkup {
             const value = root.style.getPropertyValue(key);
             if (value) next.style.setProperty(key, value, root.style.getPropertyPriority(key));
           }
-          preserveLinks(root, next);
           root.replaceWith(next);
         }
         changed = true;

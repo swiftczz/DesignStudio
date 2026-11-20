@@ -44,7 +44,6 @@ nonisolated struct DesignPage: Codable, Identifiable, Hashable, Sendable {
     var artboards: [Artboard] = []
     /// 画布共用样式：同一画布的每个画板加载时自动带上（模型输出的 ```css shared 代码块）
     var sharedCSS: String?
-    var prototype: CanvasPrototype?
 
     static func defaultName(index: Int) -> String { "画布 \(index)" }
 
@@ -228,10 +227,7 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
     }
 
     mutating func removeArtboard(_ id: UUID) {
-        for p in pages.indices {
-            pages[p].artboards.removeAll { $0.id == id }
-            pages[p].prototype?.removeArtboard(id)
-        }
+        for p in pages.indices { pages[p].artboards.removeAll { $0.id == id } }
     }
 
     /// 由旧版本的单个 HTML 迁移为一页一个画板

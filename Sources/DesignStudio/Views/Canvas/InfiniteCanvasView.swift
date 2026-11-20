@@ -102,13 +102,6 @@ struct InfiniteCanvasView: View {
                     .allowsHitTesting(false)
                     .zIndex(3)
 
-                if session.showsPrototypeLinks, let page {
-                    PrototypeConnections(page: page, session: session, drag: artboardDrag)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                        .zIndex(2)
-                }
-
                 if let m = marquee {
                     let r = CGRect(x: min(m.start.x, m.end.x), y: min(m.start.y, m.end.y),
                                    width: abs(m.end.x - m.start.x), height: abs(m.end.y - m.start.y))
@@ -241,36 +234,6 @@ struct InfiniteCanvasView: View {
         for id in plan.mountOrder where plan.visible.contains(id) {
             guard !Task.isCancelled else { return }
             await session.captureArtboardPreview(id)
-        }
-    }
-}
-
-private struct PrototypeConnections: View {
-    let page: DesignPage
-    let session: ProjectSession
-    let drag: ArtboardDragPreview
-
-    var body: some View {
-        Canvas { context, _ in
-            let boards = Dictionary(page.artboards.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            for link in page.prototype?.playableLinks(in: page.artboards) ?? [] {
-                guard let source = boards[link.sourceArtboardID], let target = boards[link.destinationArtboardID] else { continue }
-                let from = session.viewRect(drag.frame(for: source))
-                let to = session.viewRect(drag.frame(for: target))
-                let direction: CGFloat = to.midX >= from.midX ? 1 : -1
-                let start = CGPoint(x: direction > 0 ? from.maxX : from.minX, y: from.minY + from.height * link.sourceY)
-                let end = CGPoint(x: direction > 0 ? to.minX : to.maxX, y: to.midY)
-                let curve = max(25, abs(end.x - start.x) * 0.45) * direction
-                let path = Path {
-                    $0.move(to: start)
-                    $0.addCurve(to: end, control1: CGPoint(x: start.x + curve, y: start.y),
-                                control2: CGPoint(x: end.x - curve, y: end.y))
-                    $0.move(to: CGPoint(x: end.x - direction * 8, y: end.y - 4))
-                    $0.addLine(to: end)
-                    $0.addLine(to: CGPoint(x: end.x - direction * 8, y: end.y + 4))
-                }
-                context.stroke(path, with: .color(Theme.accent), style: StrokeStyle(lineWidth: 2, lineCap: .round))
-            }
         }
     }
 }
