@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import PDFKit
 import Testing
 @testable import DesignStudio
@@ -325,7 +326,8 @@ struct ProjectWorkflowTests {
         #expect(session.selection?.artboardID == board.id)
     }
 
-    @Test func failedGenerationKeepsCommentsPendingUntilCompletedBoardsAreAccepted() async throws {
+    @Test(.timeLimit(.minutes(1)))
+    func failedGenerationKeepsCommentsPendingUntilCompletedBoardsAreAccepted() async throws {
         let folder = try TempWorkspace.make(prefix: "project-generation")
         defer { try? FileManager.default.removeItem(at: folder) }
         let persistence = PersistenceController(root: folder)
@@ -345,12 +347,13 @@ struct ProjectWorkflowTests {
         session.draft = "Use the comments."
         session.send()
 
-        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
-        while app.project(project.id)?.messages.last?.errorText == nil, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
+        // Both preparation and generation run in tasks scheduled on the main actor.
+        let busy = Observations { session.isPreparingRequest || session.isGenerating }
+        for await isBusy in busy {
+            if !isBusy { break }
         }
         let reply = try #require(app.project(project.id)?.messages.last)
-        #expect(reply.errorText != nil)
+        try #require(reply.errorText != nil)
         #expect(reply.recovery?.boardNames == ["A"])
         #expect(reply.generation?.firstText != nil)
         #expect(session.pendingComments.count == 2)
