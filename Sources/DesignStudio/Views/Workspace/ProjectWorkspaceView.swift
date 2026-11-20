@@ -5,23 +5,42 @@ import AppKit
 struct ProjectWorkspaceView: View {
     @Environment(AppModel.self) private var app
     @Bindable var session: ProjectSession
+    @State private var batchExport: CanvasExportJob?
+    @State private var loadsWebContent = false
     /// 对话栏宽度：拖动分隔线调整，所有项目共用并记住
     @AppStorage("chatPanelWidth") private var chatWidth: Double = ChatPanelDivider.defaultWidth
 
     var body: some View {
-        HStack(spacing: 0) {
-            if session.showChat {
-                ChatPanel(session: session)
-                    .frame(width: ChatPanelDivider.clamp(chatWidth))
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-                // 与画布一样延伸到窗口顶端，上下两端的分隔一致（标题栏背景是透明的）
-                ChatPanelDivider(width: $chatWidth)
-                    .ignoresSafeArea(.container, edges: .top)
+        GeometryReader { geometry in
+            let stacked = geometry.size.width < 700
+            let layout = stacked ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0))
+            layout {
+                if session.showChat && !stacked {
+                    let availableWidth = max(ChatPanelDivider.minWidth, geometry.size.width - 410)
+                    let panelWidth = min(ChatPanelDivider.clamp(chatWidth), availableWidth)
+                    chat(width: panelWidth)
+                    ChatPanelDivider(width: Binding(
+                        get: { panelWidth },
+                        set: { chatWidth = min($0, availableWidth) }
+                    ))
+                        .ignoresSafeArea(.container, edges: .top)
+                }
+                InfiniteCanvasView(session: session, loadsWebContent: loadsWebContent)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .scrollEdgeEffectHidden(true, for: .top)
+                if session.showChat && stacked {
+                    Divider()
+                    chat(height: min(270, geometry.size.height * 0.37))
+                }
             }
-            InfiniteCanvasView(session: session)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // 画板网页（WKWebView 是滚动视图）移到标题栏下方时，系统会画一条不透明的「滚动边缘效果」盖住画布
-                .scrollEdgeEffectHidden(true, for: .top)
+        }
+        .task {
+            // Let the selection, title and workspace draw before installing WebKit views.
+            do { try await Task.sleep(for: .milliseconds(20)) } catch { return }
+            loadsWebContent = true
+        }
+        .sheet(item: $batchExport) { job in
+            CanvasExportSheet(job: job)
         }
         .inspector(isPresented: $session.showInspector) {
             InspectorView(session: session)
@@ -35,6 +54,11 @@ struct ProjectWorkspaceView: View {
         }
         // 标题栏透明：画布一直延伸到窗口顶端
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+    }
+
+    private func chat(width: CGFloat? = nil, height: CGFloat? = nil) -> some View {
+        ChatPanel(session: session, loadsHistory: loadsWebContent)
+            .frame(width: width, height: height)
     }
 
     private var isFullScreen: Bool { session.isFullScreen }
@@ -74,7 +98,7 @@ struct ProjectWorkspaceView: View {
         ToolbarItemGroup(placement: .primaryAction) {
             VersionHistoryButton(session: session)
             ProjectSettingsButton(session: session)
-            ExportMenu(session: session)
+            ExportMenu(session: session) { batchExport = $0 }
         }
 
         ToolbarSpacer(.fixed, placement: .primaryAction)
@@ -225,6 +249,7 @@ private struct ProjectSettingsButton: View {
 struct ExportMenu: View {
     @Environment(AppModel.self) private var app
     let session: ProjectSession
+    let startExport: (CanvasExportJob) -> Void
 
     var body: some View {
         Menu {
@@ -234,10 +259,10 @@ struct ExportMenu: View {
                 }
                 Divider()
             }
-            if let project = session.project, let page = session.currentPage, !page.artboards.isEmpty {
+            if let project = session.project, let page = session.document.page(session.currentPageID), !page.artboards.isEmpty {
                 // 工具栏的导出针对整个画布；单个画板在画板标题栏右侧导出。导出的 HTML 都合并了画布共用样式
                 let boards = page.composedArtboards
-                let name = session.document.pages.count > 1 ? "\(project.name)-\(page.displayName)" : project.name
+                let name = session.document.pages.count > 1 ? "\(project.displayName)-\(page.displayName)" : project.displayName
                 Section("当前画布（\(boards.count) 个画板）") {
                     Button("导出一个 HTML", systemImage: "doc.richtext") {
                         ExportService.exportCanvasHTML(boards, kind: session.kind, name: name)
@@ -246,27 +271,10 @@ struct ExportMenu: View {
                         ExportService.exportAllHTML(boards, projectName: name)
                     }
                     Button("导出一个 PDF", systemImage: "doc.on.doc") {
-                        Task {
-                            var pages: [Data] = []
-                            for b in boards { if let d = try? await session.pdf(b) { pages.append(d) } }
-                            ExportService.exportMergedPDF(pages, name: name)
-                        }
+                        startExport(CanvasExportJob(name: name, page: page, kind: session.kind, format: .pdf))
                     }
                     Button("导出 ZIP（HTML + PNG + PDF）", systemImage: "doc.zipper") {
-                        let bundle = CanvasBundle.make(title: name, artboards: boards, kind: session.kind)
-                        Task {
-                            do {
-                                var files: [(name: String, html: String, png: Data?, pdf: Data)] = []
-                                for board in boards {
-                                    let pdf = try await session.pdf(board)
-                                    let png = await session.snapshot(board).flatMap { ImageUtil.pngData($0) }
-                                    files.append((board.name, board.html, png, pdf))
-                                }
-                                ExportService.exportCanvasZip(name: name, bundle: bundle, sharedCSS: page.sharedCSS, boards: files)
-                            } catch {
-                                ExportService.presentError("导出 ZIP 失败", error)
-                            }
-                        }
+                        startExport(CanvasExportJob(name: name, page: page, kind: session.kind, format: .zip))
                     }
                     Button("在浏览器中打开整个画布", systemImage: "safari") {
                         ExportService.openInBrowser(CanvasBundle.make(title: name, artboards: boards, kind: session.kind),
@@ -286,7 +294,79 @@ struct ExportMenu: View {
         } label: {
             Label("导出", systemImage: "square.and.arrow.up")
         }
+        .accessibilityLabel("导出")
         .help("导出整个画布与交接")
+    }
+}
+
+private struct CanvasExportSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let job: CanvasExportJob
+    @State private var isSaving = false
+    @State private var saveError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(job.format.title).font(.headline)
+            ProgressView(value: Double(job.completed.count), total: Double(job.boards.count)) {
+                if let index = job.renderingIndex {
+                    Text("正在渲染「\(job.boards[index].name)」")
+                } else {
+                    Text("已准备 \(job.completed.count) / \(job.boards.count) 张画板")
+                }
+            }
+            if !job.failures.isEmpty {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(job.failures.keys.sorted(), id: \.self) { index in
+                            Label("\(job.boards[index].name) · \(job.failures[index] ?? "")",
+                                  systemImage: "exclamationmark.triangle")
+                                .font(.caption)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(height: min(CGFloat(job.failures.count) * 34, 130))
+            }
+            if let saveError { Text(saveError).font(.caption).foregroundStyle(.red) }
+            HStack {
+                Spacer()
+                Button(job.isRunning ? "取消导出" : "关闭", role: .cancel) {
+                    job.cancel()
+                    dismiss()
+                }
+                .disabled(isSaving)
+                if job.isComplete {
+                    Button(isSaving ? "正在保存…" : "保存", action: save)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(isSaving)
+                } else if !job.isRunning {
+                    Button("重试失败的画板", action: job.render)
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+        .onAppear { job.render() }
+        .onDisappear { job.cancel() }
+        .interactiveDismissDisabled(isSaving)
+    }
+
+    private func save() {
+        guard let url = ExportService.savePanel(name: job.name, type: job.format == .pdf ? .pdf : .zip) else { return }
+        isSaving = true
+        saveError = nil
+        Task {
+            defer { isSaving = false }
+            do {
+                try await job.save(to: url)
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+                dismiss()
+            } catch {
+                saveError = error.localizedDescription
+            }
+        }
     }
 }
 

@@ -207,7 +207,8 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
     /// - Returns: 被修改或新增的画板 ID
     @discardableResult
     mutating func merge(_ outputs: [ParsedArtboard], into pageID: UUID?, kind: ProjectKind,
-                        fallbackTarget: UUID? = nil, previewArtboardIDs: Set<UUID> = []) -> [UUID] {
+                        fallbackTarget: UUID? = nil, previewArtboardIDs: Set<UUID> = [],
+                        restrictingTo scopeIDs: Set<UUID>? = nil) -> [UUID] {
         guard !outputs.isEmpty else { return [] }
         let pageIndex = pageID.flatMap { id in pages.firstIndex { $0.id == id } } ?? 0
         let previous = pages[pageIndex]
@@ -222,7 +223,7 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
             // 1. 按名字匹配；2. 没有名字时：唯一输出 + 指定目标 / 页面只有一个画板 → 替换它
             var target: Int?
             if let name = out.name, let i = page.artboards.firstIndex(where: {
-                $0.name.trimmed.lowercased() == name.trimmed.lowercased()
+                (scopeIDs?.contains($0.id) ?? true) && $0.name.trimmed.lowercased() == name.trimmed.lowercased()
             }) {
                 target = i
             } else if out.name == nil, outputs.count == 1 {
@@ -233,6 +234,7 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
                 }
             }
 
+            if let scopeIDs, target.map({ scopeIDs.contains(page.artboards[$0].id) }) != true { continue }
             if let i = target {
                 let current = page.artboards[i]
                 let oldFrame = current.frame

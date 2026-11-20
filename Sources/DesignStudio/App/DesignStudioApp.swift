@@ -2,6 +2,18 @@ import SwiftUI
 import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    weak var persistence: PersistenceController?
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let persistence, !persistence.flush() else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "有项目尚未保存"
+        alert.informativeText = "你可以返回应用，检查保存错误并重试。"
+        alert.addButton(withTitle: "返回应用")
+        alert.addButton(withTitle: "退出")
+        return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // `swift run` 启动的可执行文件默认没有 Dock 图标，这里切换为常规 App
         NSApp.setActivationPolicy(.regular)
@@ -22,7 +34,10 @@ struct DesignStudioApp: App {
                 .environment(app)
                 .frame(minWidth: 1080, minHeight: 680)
                 .onOpenURL { app.importProject(from: $0) }
-                .onAppear { app.softwareUpdater.start(legacyAutomaticChecks: app.settings.automaticallyChecksForUpdates) }
+                .onAppear {
+                    delegate.persistence = app.persistence
+                    app.softwareUpdater.start(legacyAutomaticChecks: app.settings.automaticallyChecksForUpdates)
+                }
                 .task { await app.auth.refreshAll(profiles: app.providers) }
         }
         .defaultSize(width: 1480, height: 920)

@@ -104,6 +104,27 @@ struct ProjectArchiveTests {
         }
     }
 
+    @Test func exportsOnlyCommentsBelongingToSelectedBoards() throws {
+        let first = Artboard(name: "同名", html: "<p>1</p>", width: 390, height: 844)
+        let second = Artboard(name: "同名", html: "<p>2</p>", width: 390, height: 844)
+        let page = DesignPage(name: "导出", artboards: [first])
+        var project = Project(name: "交接", kind: .prototype)
+        project.document = DesignDocument(pages: [page, DesignPage(name: "保留", artboards: [second])])
+        let kept = CanvasComment(selector: "p", tag: "p", snippet: "", note: "保留", artboardName: first.name,
+                                 artboardID: first.id)
+        project.comments = [
+            kept,
+            CanvasComment(selector: "p", tag: "p", snippet: "", note: "画布外", artboardName: second.name,
+                          artboardID: second.id),
+            CanvasComment(selector: "p", tag: "p", snippet: "", note: "旧数据无法确定归属", artboardName: first.name)
+        ]
+        let archive = try ProjectArchive(project: project, designSystem: nil, includingHistory: true,
+                                         canvasIDs: [page.id], includingComments: true)
+        #expect(archive.project.comments == [kept])
+        #expect(archive.project.messages.isEmpty)
+        #expect(archive.project.versions.isEmpty)
+    }
+
     @Test func resolvesDesignSystemCollisions() throws {
         let system = DesignSystem.blank()
         let archive = try ProjectArchive(project: Project(name: "t", kind: .prototype),

@@ -9,12 +9,19 @@ import Foundation
 /// 支持多个代码块；最后一个未闭合的代码块会以 `complete == false` 返回（用于流式实时预览）。
 nonisolated enum ArtboardParser {
     static func parse(_ text: String) -> [ParsedArtboard] {
-        HTMLExtractor.artifacts(in: text).compactMap { artifact in
+        designOutput(text).boards
+    }
+
+    static func designOutput(_ text: String) -> (boards: [ParsedArtboard], css: String?) {
+        let artifacts = HTMLExtractor.artifacts(in: text)
+        let boards: [ParsedArtboard] = artifacts.compactMap { artifact in
             guard !artifact.isSharedCSS, !isElementInfo(artifact.info) else { return nil }
             let attributes = parseInfo(artifact.info)
             return ParsedArtboard(name: attributes.name, width: attributes.width, height: attributes.height,
                                   autoHeight: attributes.autoHeight, html: artifact.html, complete: artifact.complete)
         }
+        let css = artifacts.last(where: \.isSharedCSS).flatMap { $0.complete ? $0.html : nil }
+        return (boards, css)
     }
 
     /// 画布共用样式代码块（```css shared）；有多个时取最后一个

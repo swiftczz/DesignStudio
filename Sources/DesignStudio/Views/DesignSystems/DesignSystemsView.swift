@@ -230,6 +230,27 @@ private struct DesignSystemPreview: View {
         return Color(hex: fallback)
     }
 
+    private func contrast(_ label: String, foreground: Color, background: Color) -> some View {
+        let ratio = (max(luminance(foreground), luminance(background)) + 0.05)
+            / (min(luminance(foreground), luminance(background)) + 0.05)
+        let value = ratio.formatted(.number.precision(.fractionLength(2))) + ":1"
+        return LabeledContent(label) {
+            Text(value).monospacedDigit()
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label)对比度")
+        .accessibilityValue(value)
+    }
+
+    private func luminance(_ color: Color) -> Double {
+        let rgb = NSColor(color).usingColorSpace(.sRGB) ?? .black
+        func linear(_ value: Double) -> Double {
+            value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * linear(rgb.redComponent) + 0.7152 * linear(rgb.greenComponent)
+            + 0.0722 * linear(rgb.blueComponent)
+    }
+
     var body: some View {
         let bg = token(["background", "bg"], fallback: "#FFFFFF")
         let surface = token(["surface", "card"], fallback: "#F4F4F5")
@@ -270,6 +291,13 @@ private struct DesignSystemPreview: View {
             .padding(18)
             .background(bg, in: .rect(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.separator))
+
+            VStack(alignment: .leading, spacing: 5) {
+                contrast("正文", foreground: text, background: bg)
+                contrast("次要正文", foreground: muted, background: bg)
+                contrast("主要按钮文字", foreground: .white, background: primary)
+            }
+            .font(.caption)
 
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 56), spacing: 8)], spacing: 8) {
                 ForEach(system.colors) { c in

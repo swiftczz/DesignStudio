@@ -5,7 +5,9 @@ import Observation
 /// 无限画布：所有画板摊开在画布上，可平移、缩放，直接选中和编辑元素
 struct InfiniteCanvasView: View {
     @Bindable var session: ProjectSession
+    let loadsWebContent: Bool
     @FocusState private var focused: Bool
+    @State private var mountedArtboardIDs: Set<UUID> = []
     /// 底部工具栏的实际宽度：全屏顶部控制条与它等宽
     @State private var toolbarWidth: CGFloat = 320
 
@@ -61,6 +63,7 @@ struct InfiniteCanvasView: View {
 
     var body: some View {
         GeometryReader { geo in
+            let boards = session.currentPage?.artboards ?? []
             ZStack(alignment: .topLeading) {
                 CanvasGrid(zoom: session.zoom, pan: session.pan)
                     .contentShape(.rect)
@@ -70,8 +73,9 @@ struct InfiniteCanvasView: View {
                     }
                     .gesture(marqueeGesture)
 
-                ForEach(session.currentPage?.artboards ?? []) { board in
-                    ArtboardFrame(artboard: board, session: session, drag: artboardDrag)
+                ForEach(boards) { board in
+                    ArtboardFrame(artboard: board, session: session, drag: artboardDrag,
+                                  mountsWebView: mountedArtboardIDs.contains(board.id))
                         .zIndex(Double(artboardDrag.isMoving(board.id) ? 1 : 0))
                 }
 
@@ -128,6 +132,10 @@ struct InfiniteCanvasView: View {
             .background(CanvasEventMonitor(session: session))
             .onAppear { session.viewportDidChange(geo.size) }
             .onChange(of: geo.size) { _, size in session.viewportDidChange(size) }
+            .task(id: loadsWebContent ? boards.map(\.id) : []) {
+                guard loadsWebContent else { return }
+                await mountArtboards(boards, viewport: geo.size)
+            }
         }
         .background(CanvasPalette.background)
         // 顶部控制条与底部工具栏对称：距窗口顶端 edgeInset（与工具栏距底部一致）。
@@ -192,6 +200,24 @@ struct InfiniteCanvasView: View {
                 }
                 .allowsHitTesting(false)
             }
+        }
+    }
+
+    private func mountArtboards(_ boards: [Artboard], viewport: CGSize) async {
+        guard !Task.isCancelled else { return }
+        mountedArtboardIDs.formIntersection(boards.map(\.id))
+        let bounds = CGRect(origin: .zero, size: viewport)
+        let remaining = boards.filter { !mountedArtboardIDs.contains($0.id) }
+        let visible = remaining.filter { session.viewRect($0.frame).intersects(bounds) }
+        let visibleIDs = Set(visible.map(\.id))
+        let order = visible + remaining.filter { !visibleIDs.contains($0.id) }
+
+        for index in stride(from: 0, to: order.count, by: 2) {
+            if index > 0 {
+                do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
+            }
+            guard !Task.isCancelled else { return }
+            mountedArtboardIDs.formUnion(order[index..<min(index + 2, order.count)].map(\.id))
         }
     }
 }
@@ -313,6 +339,7 @@ private struct ArtboardFrame: View {
     let artboard: Artboard
     @Bindable var session: ProjectSession
     let drag: ArtboardDragPreview
+    let mountsWebView: Bool
     @GestureState private var isDragging = false
     @State private var renaming = false
     @State private var newName = ""
@@ -343,8 +370,14 @@ private struct ArtboardFrame: View {
             header(isSelected: isSelected)
                 .frame(width: width, height: headerHeight - 6, alignment: .leading)
 
-            ArtboardWebView(artboard: artboard, zoom: z, mode: session.editorMode(for: artboard.id),
-                            selectedElementIDs: selectedElementIDs, session: session)
+            Group {
+                if mountsWebView {
+                    ArtboardWebView(artboard: artboard, zoom: z, mode: session.editorMode(for: artboard.id),
+                                    selectedElementIDs: selectedElementIDs, session: session)
+                } else {
+                    Color.clear
+                }
+            }
                 .frame(width: artboard.width * z, height: artboard.height * z)
                 .background(.white)
                 .clipShape(.rect(cornerRadius: 2))
@@ -770,15 +803,74 @@ private struct CanvasTopLeftBar: View {
             }
             .buttonStyle(.borderless)
             .tint(.primary)
+            .accessibilityLabel(session.showChat ? "隐藏对话" : "显示对话")
             .help(session.showChat ? "隐藏对话" : "显示对话")
 
             Divider().frame(height: 16)
 
             PagePicker(session: session)
+            ArtboardFinder(session: session)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .glassEffect(.regular, in: .capsule)
+    }
+}
+
+private struct ArtboardFinder: View {
+    let session: ProjectSession
+    @State private var isOpen = false
+    @State private var query = ""
+
+    var body: some View {
+        Button {
+            query = ""
+            isOpen.toggle()
+        } label: {
+            Image(systemName: "magnifyingglass")
+        }
+        .buttonStyle(.borderless)
+        .tint(.primary)
+        .accessibilityLabel("查找画板")
+        .help("查找并定位画板")
+        .popover(isPresented: $isOpen, arrowEdge: .bottom) {
+            let boards = session.currentPage?.artboards ?? []
+            let matches = boards.filter { query.trimmed.isEmpty || $0.name.localizedStandardContains(query.trimmed) }
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("搜索当前画布", text: $query)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { if let board = matches.first { reveal(board) } }
+                if matches.isEmpty {
+                    Text("没有匹配的画板").foregroundStyle(.secondary)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 5) {
+                            ForEach(matches) { board in
+                                Button { reveal(board) } label: {
+                                    HStack {
+                                        Text(board.name).lineLimit(1)
+                                        Spacer()
+                                        Text("\(Int(board.width)) × \(Int(board.height))").foregroundStyle(.secondary)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(.rect)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .frame(height: min(CGFloat(matches.count) * 25, 240))
+                }
+            }
+            .padding(12)
+            .frame(width: 265)
+        }
+    }
+
+    private func reveal(_ board: Artboard) {
+        session.select(CanvasSelection(artboardID: board.id, elementID: nil))
+        session.zoomToSelection()
+        isOpen = false
     }
 }
 

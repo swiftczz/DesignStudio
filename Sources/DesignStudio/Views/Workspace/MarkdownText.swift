@@ -45,7 +45,7 @@ struct MarkdownContentView: NSViewRepresentable {
         web.configuration.userContentController.removeScriptMessageHandler(forName: "markdown", contentWorld: .defaultClient)
         web.navigationDelegate = nil
         web.stopLoading()
-        coordinator.onHeight = nil
+        coordinator.detach()
     }
 
     static func contains(_ responder: NSResponder?) -> Bool {
@@ -79,6 +79,8 @@ struct MarkdownContentView: NSViewRepresentable {
         private var isReady = false
         private var needsRender = false
         private var isRendering = false
+        private var documentRevision = 0
+        private var renderTask: Task<Void, Never>?
 
         func update(_ text: String, style: MarkdownText.Style, in webView: WKWebView) {
             guard text != self.text || style != self.style else { return }
@@ -94,22 +96,41 @@ struct MarkdownContentView: NSViewRepresentable {
         }
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-            isReady = false
+            resetRendering()
             needsRender = true
-            isRendering = false
             webView.loadHTMLString(MarkdownContentView.page, baseURL: nil)
+        }
+
+        func detach() {
+            resetRendering()
+            onHeight = nil
+        }
+
+        private func resetRendering() {
+            documentRevision += 1
+            renderTask?.cancel()
+            renderTask = nil
+            isReady = false
+            isRendering = false
         }
 
         private func showContent(in webView: WKWebView) {
             guard isReady, needsRender, !isRendering, let text else { return }
             needsRender = false
             isRendering = true
-            webView.callAsyncJavaScript("updateMarkdown(html, style)",
-                                        arguments: ["html": MarkdownDocument.html(text), "style": style.rawValue],
-                                        in: nil, in: .defaultClient) { [weak self, weak webView] _ in
-                guard let self, let webView else { return }
-                self.isRendering = false
-                self.showContent(in: webView)
+            let style = style.rawValue
+            let revision = documentRevision
+            renderTask = Task { [weak self, weak webView] in
+                guard !Task.isCancelled else { return }
+                let html = await Task.detached(priority: .userInitiated) { MarkdownDocument.html(text) }.value
+                guard !Task.isCancelled, let self, let webView, self.documentRevision == revision else { return }
+                webView.callAsyncJavaScript("updateMarkdown(html, style)", arguments: ["html": html, "style": style],
+                                            in: nil, in: .defaultClient) { [weak self, weak webView] _ in
+                    guard let self, let webView, self.documentRevision == revision else { return }
+                    self.renderTask = nil
+                    self.isRendering = false
+                    self.showContent(in: webView)
+                }
             }
         }
 

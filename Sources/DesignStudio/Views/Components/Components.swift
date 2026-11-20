@@ -264,23 +264,32 @@ struct CanvasBackground: View {
 /// 附件缩略图条
 struct AttachmentStrip: View {
     @Binding var attachments: [ChatAttachment]
+    var provider: ProviderKind?
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(attachments) { a in
-                    ZStack(alignment: .topTrailing) {
-                        AttachmentThumbnail(attachment: a, size: 56, removable: true)
-                        Button {
-                            attachments.removeAll { $0.id == a.id }
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .symbolRenderingMode(.palette)
-                                .foregroundStyle(.white, .black.opacity(0.6))
+                    VStack(alignment: .leading, spacing: 2) {
+                        ZStack(alignment: .topTrailing) {
+                            AttachmentThumbnail(attachment: a, size: 56, removable: true)
+                            Button {
+                                attachments.removeAll { $0.id == a.id }
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(.white, .black.opacity(0.6))
+                            }
+                            .buttonStyle(.plain)
+                            .padding(3)
+                            .accessibilityLabel("移除 \(a.filename)")
                         }
-                        .buttonStyle(.plain)
-                        .padding(3)
-                        .accessibilityLabel("移除 \(a.filename)")
+                        if let provider {
+                            let readable = a.isImage || a.documentText != nil || provider.isCLI
+                            Text(a.documentText != nil ? "已读取" : readable ? "已添加" : "模型只收到文件名")
+                                .font(.caption2)
+                                .foregroundStyle(readable ? Color.secondary : .orange)
+                        }
                     }
                 }
             }
@@ -349,6 +358,7 @@ struct ProviderMenu: View {
     @Environment(AppModel.self) private var app
     @Binding var selection: ModelChoice
     var showsLogo = true
+    var showsProviderName = true
     var maximumTitleWidth: CGFloat? = nil
 
     var body: some View {
@@ -358,7 +368,7 @@ struct ProviderMenu: View {
                     ProviderLogo(current, size: 14)
                         .accessibilityHidden(true)
                 }
-                Text(currentTitle)
+                Text(showsProviderName ? currentTitle : modelTitle)
                     .lineLimit(1)
                     .frame(maxWidth: maximumTitleWidth, alignment: .leading)
             }
@@ -368,9 +378,13 @@ struct ProviderMenu: View {
     }
 
     private var currentTitle: String {
+        current.map { "\($0.name) · \(modelTitle)" } ?? modelTitle
+    }
+
+    private var modelTitle: String {
         guard let current else { return "选择模型" }
         let effort = activeEffort.map { " · " + Effort.title($0) } ?? ""
-        return "\(current.name) · \(current.resolved(model: activeModel).displayModel)\(effort)"
+        return "\(current.resolved(model: activeModel).displayModel)\(effort)"
     }
 
     private func menu<L: View>(@ViewBuilder label: () -> L) -> some View {

@@ -4,14 +4,17 @@ struct ProjectExportOptions: View {
     @Environment(\.dismiss) private var dismiss
     @State private var selected: Set<UUID>
     @State private var includingHistory = true
+    @State private var includingComments = true
     private let canvases: [DesignPage]
     private let hasHistory: Bool
-    let onContinue: (Set<UUID>, Bool) -> Void
+    private let hasComments: Bool
+    let onContinue: (Set<UUID>, Bool, Bool) -> Void
 
-    init(project: Project, onContinue: @escaping (Set<UUID>, Bool) -> Void) {
+    init(project: Project, onContinue: @escaping (Set<UUID>, Bool, Bool) -> Void) {
         let canvases = project.workingDocument.pages
         self.canvases = canvases
-        self.hasHistory = ProjectArchive.hasHistory(project)
+        self.hasHistory = !project.messages.isEmpty || !project.versions.isEmpty
+        self.hasComments = !project.comments.isEmpty
         self.onContinue = onContinue
         _selected = State(initialValue: Set(canvases.map(\.id)))
     }
@@ -24,9 +27,14 @@ struct ProjectExportOptions: View {
 
             canvasSelection
 
+            if hasComments {
+                Toggle("包含所选画布的批注", isOn: $includingComments)
+                    .toggleStyle(.checkbox)
+            }
+
             if hasHistory {
                 VStack(alignment: .leading, spacing: 6) {
-                    Toggle("包含对话、参考附件、批注和版本历史", isOn: Binding(
+                    Toggle("包含对话、参考附件和版本历史", isOn: Binding(
                         get: { allSelected && includingHistory },
                         set: { includingHistory = $0 }
                     ))
@@ -45,7 +53,7 @@ struct ProjectExportOptions: View {
                 Button("取消", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("继续") {
-                    onContinue(selected, allSelected && includingHistory)
+                    onContinue(selected, allSelected && includingHistory, hasComments && includingComments)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)

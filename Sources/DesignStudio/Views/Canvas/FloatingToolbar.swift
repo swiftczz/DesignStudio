@@ -17,9 +17,17 @@ struct FloatingToolbar: View {
     private let snapAnimation = Animation.spring(response: 0.42, dampingFraction: 0.76)
 
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            completeToolbar.fixedSize()
+            compactToolbar
+        }
+        .disabled(!session.isEditable)
+    }
+
+    private var completeToolbar: some View {
         let optionsFrame = toolOptionsFrame
         let optionsInset = optionsFrame == nil ? 0 : optionsHeight + optionsSpacing
-        mainToolbar(tooltipLift: optionsInset)
+        return mainToolbar(tooltipLift: optionsInset)
             .padding(.top, optionsInset)
             .overlay(alignment: .topLeading) {
                 // 选项栏有自己的布局区域，鼠标事件不会落到主工具条的滑动手势上。
@@ -32,7 +40,41 @@ struct FloatingToolbar: View {
                     .frame(height: optionsHeight)
                 }
             }
-            .disabled(!session.isEditable)
+    }
+
+    private var compactToolbar: some View {
+        HStack(spacing: 8) {
+            Menu {
+                ForEach(CanvasTool.allCases) { tool in
+                    Button(tool.title, systemImage: tool.symbol) { activate(tool) }
+                }
+                if session.tool == .pencil {
+                    Divider()
+                    Picker("铅笔粗细", selection: $session.pencilStroke.weight) {
+                        ForEach(PencilStroke.Weight.allCases) { Text($0.title).tag($0) }
+                    }
+                    Picker("铅笔线型", selection: $session.pencilStroke.pattern) {
+                        ForEach(PencilStroke.Pattern.allCases) { Text($0.title).tag($0) }
+                    }
+                } else if session.tool == .rectangle {
+                    Divider()
+                    Picker("形状", selection: $session.shapeKind) {
+                        ForEach(ShapeKind.allCases) { Label($0.title, systemImage: $0.symbol).tag($0) }
+                    }
+                }
+            } label: {
+                Label(session.tool.title, systemImage: session.tool.symbol)
+            }
+            .accessibilityLabel("画布工具")
+            Button {
+                session.showAskAI.toggle()
+            } label: {
+                Label("询问 AI", systemImage: "sparkles").labelStyle(.iconOnly)
+            }
+            .accessibilityLabel("询问 AI")
+        }
+        .padding(8)
+        .glassEffect(.regular, in: .capsule)
     }
 
     private func mainToolbar(tooltipLift: CGFloat) -> some View {

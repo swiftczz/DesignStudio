@@ -12,7 +12,8 @@ enum SidebarRoute: Hashable {
 @MainActor
 @Observable
 final class AppModel {
-    let persistence = PersistenceController()
+    let persistence: PersistenceController
+    let makeProvider: @MainActor (ProviderProfile) throws -> any LLMProvider
     let auth = CLIAuthService()
     let softwareUpdater = SoftwareUpdater()
 
@@ -36,7 +37,10 @@ final class AppModel {
     @ObservationIgnored private var sessions: [UUID: ProjectSession] = [:]
     @ObservationIgnored private var thumbnailCache: [UUID: (Date, NSImage)] = [:]
 
-    init() {
+    init(persistence: PersistenceController = PersistenceController(),
+         makeProvider: @escaping @MainActor (ProviderProfile) throws -> any LLMProvider = ProviderFactory.make) {
+        self.persistence = persistence
+        self.makeProvider = makeProvider
         projects = persistence.loadProjects()
         persistence.clearGeneratingMarkers()
         markInterruptedReplies()
@@ -60,8 +64,9 @@ final class AppModel {
             var changed = false
             for j in projects[i].messages.indices {
                 let m = projects[i].messages[j]
-                guard m.role == .assistant, m.text.trimmed.isEmpty, m.errorText == nil,
-                      !m.wasStopped, m.versionID == nil else { continue }
+                guard m.role == .assistant, m.errorText == nil, !m.wasStopped, m.versionID == nil,
+                      m.generationInProgress == true || m.text.trimmed.isEmpty else { continue }
+                projects[i].messages[j].generationInProgress = nil
                 projects[i].messages[j].errorText = "生成未完成：应用在生成过程中退出了。"
                 changed = true
             }
@@ -117,10 +122,11 @@ final class AppModel {
         projectToExport = project
     }
 
-    func saveProjectExport(_ project: Project, canvasIDs: Set<UUID>, includingHistory: Bool) {
+    func saveProjectExport(_ project: Project, canvasIDs: Set<UUID>, includingHistory: Bool, includingComments: Bool) {
         do {
             let archive = try ProjectArchive(project: project, designSystem: designSystem(for: project.designSystemID),
-                                             includingHistory: includingHistory, canvasIDs: canvasIDs)
+                                             includingHistory: includingHistory, canvasIDs: canvasIDs,
+                                             includingComments: includingComments)
             ExportService.exportProject(archive)
         } catch {
             ExportService.presentError("导出项目失败", error)
@@ -200,13 +206,26 @@ final class AppModel {
         }
     }
 
+    func retryProjectSaves() {
+        for project in projects where persistence.saveErrors[project.id] != nil {
+            persistence.save(project)
+        }
+    }
+
     func deleteProject(_ id: UUID) {
+        do {
+            try persistence.deleteProject(id)
+        } catch {
+            ExportService.presentError("无法将项目移到废纸篓", error)
+            return
+        }
         sessions[id]?.stop()
         persistence.setGenerating(id, false)
         if route == .project(id) { route = .home }
         sessions[id] = nil
         projects.removeAll { $0.id == id }
-        persistence.deleteProject(id)
+        settings.pinnedProjectIDs?.remove(id)
+        saveSettings()
         thumbnailStamps[id] = nil
         thumbnailCache[id] = nil
     }

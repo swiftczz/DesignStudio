@@ -17,12 +17,8 @@ nonisolated struct ProjectArchive: Codable, Sendable {
     let project: Project
     let designSystem: DesignSystem?
 
-    static func hasHistory(_ project: Project) -> Bool {
-        !project.messages.isEmpty || !project.comments.isEmpty || !project.versions.isEmpty
-    }
-
     init(project: Project, designSystem: DesignSystem?, includingHistory: Bool,
-         canvasIDs: Set<UUID>? = nil) throws {
+         canvasIDs: Set<UUID>? = nil, includingComments: Bool? = nil) throws {
         var copy = project
         let document = project.workingDocument
         let pages = canvasIDs.map { ids in document.pages.filter { ids.contains($0.id) } } ?? document.pages
@@ -43,7 +39,20 @@ nonisolated struct ProjectArchive: Codable, Sendable {
             copy.messages = []
             copy.versions = []
             copy.currentVersionID = nil
+        }
+        if !(includingComments ?? (includingHistory && pages.count == document.pages.count)) {
             copy.comments = []
+            if includingComments == false {
+                for index in copy.messages.indices { copy.messages[index].comments = [] }
+            }
+        } else if pages.count != document.pages.count {
+            let selectedBoards = Set(pages.flatMap(\.artboards).map(\.id))
+            let byName = Dictionary(grouping: document.allArtboards, by: \.name)
+            copy.comments = copy.comments.filter { comment in
+                if let id = comment.artboardID { return selectedBoards.contains(id) }
+                guard let name = comment.artboardName, let matches = byName[name], matches.count == 1 else { return false }
+                return selectedBoards.contains(matches[0].id)
+            }
         }
         Self.clearAttachmentPaths(in: &copy)
         self.format = Self.formatID

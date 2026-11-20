@@ -1,16 +1,24 @@
 import Foundation
 import AppKit
+import Observation
 
 /// 简单的 JSON 文件存储：~/Library/Application Support/DesignStudio
 @MainActor
+@Observable
 final class PersistenceController {
     let root: URL
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    @ObservationIgnored private let writer = ProjectDiskWriter()
+    @ObservationIgnored private var pending: [UUID: Project] = [:]
+    @ObservationIgnored private var scheduledSave: Task<Void, Never>?
+    private(set) var saveErrors: [UUID: String] = [:]
+    private(set) var recoveredCount = 0
+    private(set) var unreadableCount = 0
 
-    init() {
+    init(root: URL? = nil) {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        root = base.appending(path: "DesignStudio", directoryHint: .isDirectory)
+        self.root = root ?? base.appending(path: "DesignStudio", directoryHint: .isDirectory)
 
         encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -57,21 +65,51 @@ final class PersistenceController {
     func loadProjects() -> [Project] {
         let fm = FileManager.default
         guard let dirs = try? fm.contentsOfDirectory(at: projectsDirectory, includingPropertiesForKeys: nil) else { return [] }
+        recoveredCount = 0
+        unreadableCount = 0
         return dirs.compactMap { dir in
-            let file = dir.appending(path: "project.json")
-            guard let data = try? Data(contentsOf: file) else { return nil }
-            return try? decoder.decode(Project.self, from: data)
+            guard let id = UUID(uuidString: dir.lastPathComponent) else { return nil }
+            if let project = ProjectDiskWriter.read(dir, name: "project.json", id: id, decoder: decoder) {
+                return project
+            }
+            if let backup = ProjectDiskWriter.read(dir, name: "project.backup.json", id: id, decoder: decoder) {
+                recoveredCount += 1
+                return backup
+            }
+            unreadableCount += 1
+            return nil
         }
     }
 
     func save(_ project: Project) {
-        guard let data = try? encoder.encode(project) else { return }
-        let dir = projectDirectory(project.id)
-        let file = dir.appending(path: "project.json")
-        Task.detached(priority: .utility) {
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try? data.write(to: file, options: .atomic)
+        pending[project.id] = project
+        guard scheduledSave == nil else { return }
+        scheduledSave = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(220)) } catch { return }
+            self?.enqueuePending()
         }
+    }
+
+    private func enqueuePending() {
+        scheduledSave?.cancel()
+        scheduledSave = nil
+        let projects = pending
+        pending.removeAll()
+        guard !projects.isEmpty else { return }
+        writer.enqueue(projects, directory: projectsDirectory) { [weak self] errors in
+            self?.saveErrors = errors
+        }
+    }
+
+    func flush() -> Bool {
+        enqueuePending()
+        saveErrors = writer.errors()
+        return saveErrors.isEmpty
+    }
+
+    func dismissLoadNotice() {
+        recoveredCount = 0
+        unreadableCount = 0
     }
 
     /// Commit a new project before adding it to the sidebar. Roll back if its design system cannot be saved.
@@ -91,13 +129,12 @@ final class PersistenceController {
         }
     }
 
-    func deleteProject(_ id: UUID) {
+    func deleteProject(_ id: UUID) throws {
+        // Drain in-flight writes before moving the folder, so a late write cannot recreate it.
         let dir = projectDirectory(id)
-        do {
-            try FileManager.default.trashItem(at: dir, resultingItemURL: nil)
-        } catch {
-            try? FileManager.default.removeItem(at: dir)
-        }
+        try writer.removeProject(id, directory: dir)
+        pending[id] = nil
+        saveErrors = writer.errors()
     }
 
     func saveThumbnail(_ image: NSImage, for id: UUID) {
@@ -119,5 +156,59 @@ final class PersistenceController {
         guard let data = try? encoder.encode(value) else { return }
         let url = root.appending(path: file)
         try? data.write(to: url, options: .atomic)
+    }
+}
+
+
+// All project writes and deletes use this queue. The UI keeps only the newest unsent snapshot.
+nonisolated private final class ProjectDiskWriter: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "app.designstudio.project-writes", qos: .utility)
+    private var failures: [UUID: String] = [:]
+
+    func enqueue(_ projects: [UUID: Project], directory: URL, completion: @escaping @MainActor @Sendable ([UUID: String]) -> Void) {
+        queue.async {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.sortedKeys]
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            for (id, project) in projects {
+                let folder = directory.appending(path: id.uuidString, directoryHint: .isDirectory)
+                do {
+                    let data = try encoder.encode(project)
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    let current = folder.appending(path: "project.json")
+                    if let old = try? Data(contentsOf: current),
+                       old != data, (try? decoder.decode(Project.self, from: old))?.id == id {
+                        try old.write(to: folder.appending(path: "project.backup.json"), options: .atomic)
+                    }
+                    try data.write(to: current, options: .atomic)
+                    self.failures[id] = nil
+                } catch {
+                    self.failures[id] = error.localizedDescription
+                }
+            }
+            let errors = self.failures
+            DispatchQueue.main.async { completion(errors) }
+        }
+    }
+
+    func errors() -> [UUID: String] {
+        queue.sync { failures }
+    }
+
+    func removeProject(_ id: UUID, directory: URL) throws {
+        try queue.sync {
+            if FileManager.default.fileExists(atPath: directory.path) {
+                try FileManager.default.trashItem(at: directory, resultingItemURL: nil)
+            }
+            failures[id] = nil
+        }
+    }
+
+    static func read(_ folder: URL, name: String, id: UUID, decoder: JSONDecoder) -> Project? {
+        guard let data = try? Data(contentsOf: folder.appending(path: name)),
+              let project = try? decoder.decode(Project.self, from: data), project.id == id else { return nil }
+        return project
     }
 }

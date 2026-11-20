@@ -9,7 +9,7 @@ enum ExportService {
         return cleaned.isEmpty ? "design" : cleaned
     }
 
-    private static func savePanel(name: String, type: UTType) -> URL? {
+    static func savePanel(name: String, type: UTType) -> URL? {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [type]
         panel.canCreateDirectories = true
@@ -19,7 +19,7 @@ enum ExportService {
 
     static func exportHTML(_ html: String, name: String) {
         guard let url = savePanel(name: name, type: .html) else { return }
-        try? html.write(to: url, atomically: true, encoding: .utf8)
+        do { try html.write(to: url, atomically: true, encoding: .utf8) } catch { presentError("导出 HTML 失败", error) }
     }
 
     static func exportProject(_ archive: ProjectArchive) {
@@ -56,23 +56,7 @@ enum ExportService {
             return
         }
         guard let url = savePanel(name: name, type: .png) else { return }
-        try? data.write(to: url)
-    }
-
-    /// 把多页 PDF（每个画板一页）合并为一个文件
-    static func exportMergedPDF(_ pages: [Data], name: String) {
-        let merged = PDFDocument()
-        for data in pages {
-            guard let doc = PDFDocument(data: data) else { continue }
-            for i in 0..<doc.pageCount {
-                if let page = doc.page(at: i) { merged.insert(page, at: merged.pageCount) }
-            }
-        }
-        guard merged.pageCount > 0, let data = merged.dataRepresentation() else {
-            presentError("导出 PDF 失败", nil)
-            return
-        }
-        exportPDF(data, name: name)
+        do { try data.write(to: url, options: .atomic) } catch { presentError("导出 PNG 失败", error) }
     }
 
     /// 把整个画布导出为一个 HTML 文件：每个画板放在独立的 iframe 里，浏览器直接打开
@@ -107,14 +91,6 @@ enum ExportService {
             if let html { try html.write(to: folder.appending(path: base + ".html"), atomically: true, encoding: .utf8) }
             if let png { try png.write(to: folder.appending(path: base + ".png")) }
             if let svg { try svg.write(to: folder.appending(path: base + ".svg"), atomically: true, encoding: .utf8) }
-        }
-    }
-
-    /// 整个画布打包成 ZIP：index.html（一个文件看全部画板）、共用样式、每个画板的独立 HTML、PNG 和 PDF
-    static func exportCanvasZip(name: String, bundle: String, sharedCSS: String?,
-                                boards: [(name: String, html: String, png: Data?, pdf: Data)]) {
-        writeZip(name: name) { folder in
-            try writeCanvasZipContents(to: folder, bundle: bundle, sharedCSS: sharedCSS, boards: boards)
         }
     }
 

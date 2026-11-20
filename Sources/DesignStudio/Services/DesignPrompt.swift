@@ -117,7 +117,8 @@ nonisolated enum DesignPrompt {
     static func makeRequest(project: Project, designSystem: DesignSystem?,
                             newMessage: ChatMessage, profile: ProviderProfile,
                             pageID: UUID? = nil, selection: SelectionContext? = nil,
-                            commentsOnly: Bool = false) -> LLMRequest {
+                            commentsOnly: Bool = false, scopeIDs: Set<UUID>? = nil,
+                            preserving boardNames: Set<String> = []) -> LLMRequest {
         let limits = profile.limits
         var systemText = system(kind: project.kind, designSystem: designSystem)
         if project.needsTitleSummary {
@@ -131,15 +132,16 @@ nonisolated enum DesignPrompt {
             return page?.artboard(named: target.artboardName)
         }
         let commentBoards = newMessage.comments.compactMap { comment in
-            comment.artboardName.flatMap { page?.artboard(named: $0) }
+            if let id = comment.artboardID { return artboards.first { $0.id == id } }
+            return comment.artboardName.flatMap { page?.artboard(named: $0) }
         }
-        let scoped = selectedBoard != nil || (commentsOnly && !commentBoards.isEmpty
+        let scoped = scopeIDs != nil || selectedBoard != nil || (commentsOnly && !commentBoards.isEmpty
                                               && commentBoards.count == newMessage.comments.count)
         let instructions = ([newMessage.text] + newMessage.comments.map(\.note)).joined(separator: "\n")
         let mentioned = scoped ? artboards.filter {
             !$0.name.trimmed.isEmpty && instructions.localizedCaseInsensitiveContains($0.name.trimmed)
         } : []
-        let targetIDs = Set(([selectedBoard].compactMap { $0 } + commentBoards + mentioned).map(\.id))
+        let targetIDs = scopeIDs ?? Set(([selectedBoard].compactMap { $0 } + commentBoards + mentioned).map(\.id))
         let included = scoped ? artboards.filter { targetIDs.contains($0.id) } : artboards
         let elementEdit = selection?.elementEdit == true && !(selection?.elementHTML ?? "").isEmpty
             && selectedBoard != nil && included.count == 1
@@ -173,7 +175,7 @@ nonisolated enum DesignPrompt {
                     + "基础样式和通用组件移进去，画板里只保留自己特有的样式。\n\n"
             }
             current += "下面是本轮涉及的画板 HTML。只输出改动或新增的画板，沿用原名称：\n\n"
-            for a in included {
+            for a in included where !boardNames.contains(a.name) {
                 current += "```html artboard=\"\(a.name)\" width=\(Int(a.width)) height=\(a.autoHeight == true ? "auto" : String(Int(a.height)))\n\(a.html)\n```\n\n"
             }
             let others = artboards.filter { !targetIDs.contains($0.id) }
@@ -190,6 +192,12 @@ nonisolated enum DesignPrompt {
                 current += "```html\n\(snippet)\n```\n"
             }
             current += "\n"
+        }
+        if scopeIDs != nil {
+            current += "\n本轮只修改指定画板：\(included.map(\.name).joined(separator: "、"))。保留其他画板与共用样式。\n"
+        }
+        if !boardNames.isEmpty {
+            current += "\n已保留这些画板：\(boardNames.sorted().joined(separator: "、"))。从上一次未完成的位置继续，不输出这些画板。\n"
         }
         if !newMessage.comments.isEmpty {
             current += "## 画布上的元素批注\n"

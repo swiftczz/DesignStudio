@@ -163,9 +163,28 @@ nonisolated struct ChatMessage: Codable, Identifiable, Sendable {
     /// 模型的思考过程（思维链摘要），只用于展示，不会回传给模型
     var thinking: String?
     var errorText: String?
+    var generation: GenerationTiming?
+    var recovery: GenerationRecovery?
+    var scopeIDs: Set<UUID>?
+    var requestPageID: UUID?
+    var generationInProgress: Bool?
     var wasStopped = false
     /// 通过画布上的「询问 AI」发送时，针对的画板 / 元素
     var target: MessageTarget?
+}
+
+nonisolated struct GenerationTiming: Codable, Sendable {
+    var firstText: Double?
+    var firstArtboard: Double?
+    var total: Double
+}
+
+nonisolated struct GenerationRecovery: Codable, Sendable, Equatable {
+    var pageID: UUID
+    var targetID: UUID?
+    var boardNames: [String?]
+    var includesSharedStyles: Bool
+    var scopeIDs: Set<UUID>?
 }
 
 /// 用户消息针对的修改对象：显示在消息上方，点击可在画布上重新选中
@@ -210,6 +229,7 @@ nonisolated struct CanvasComment: Codable, Identifiable, Sendable, Equatable {
     var note: String
     /// 所在画板名称
     var artboardName: String?
+    var artboardID: UUID?
     var resolved = false
     var createdAt = Date()
 

@@ -77,6 +77,7 @@ final class ProjectSession {
     var streamingThinking = ""
     var streamingMessageID: UUID?
     var status: String?
+    var draftScopeIDs: Set<UUID> = []
     var tweakValues: [String: String] = [:]
     var lastUsage: (input: Int, output: Int)?
 
@@ -85,6 +86,13 @@ final class ProjectSession {
     @ObservationIgnored private var redoStack: [DesignDocument] = []
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var wasCancelled = false
+    @ObservationIgnored private var generationStartedAt: ContinuousClock.Instant?
+    @ObservationIgnored private var generationTiming = GenerationTiming(total: 0)
+    @ObservationIgnored private var generationScope: Set<String>?
+    @ObservationIgnored private var generationScopeIDs: Set<UUID>?
+    @ObservationIgnored private var checkpoint: GenerationRecovery?
+    @ObservationIgnored private var pendingFirstArtboard: (messageID: UUID, started: ContinuousClock.Instant, boards: Set<UUID>)?
+    @ObservationIgnored private var preservedBoards: Set<String> = []
     @ObservationIgnored private var lastLiveUpdate = Date.distantPast
     @ObservationIgnored private var streamingArtifactStarted = false
     @ObservationIgnored private var generationPageID: UUID?
@@ -218,11 +226,16 @@ final class ProjectSession {
     }
 
     func viewportDidChange(_ size: CGSize) {
+        let previous = viewportSize
         viewportSize = size
-        if Date() < refitUntil { isFullScreen ? fitFullScreen() : zoomToFit() }
-        if !didInitialFit, size.width > 0, currentPage?.bounds != nil {
+        if Date() < refitUntil {
+            isFullScreen ? fitFullScreen() : zoomToFit()
+        } else if !didInitialFit, size.width > 0, currentPage?.bounds != nil {
             didInitialFit = true
             zoomToFit()
+        } else if previous.width > 0, size.width > 0 {
+            pan.x += (size.width - previous.width) / 2
+            pan.y += (size.height - previous.height) / 2
         }
     }
 
@@ -357,6 +370,19 @@ final class ProjectSession {
     // MARK: - 编辑脚本消息
 
     func artboardDidLoad(_ id: UUID, tree: [ElementNode]) {
+        if let pending = pendingFirstArtboard, !tree.isEmpty, pending.boards.contains(id) {
+            pendingFirstArtboard = nil
+            let seconds = elapsed(since: pending.started)
+            app.updateProject(projectID, touch: false) { project in
+                if let i = project.messages.firstIndex(where: { $0.id == pending.messageID }) {
+                    project.messages[i].generation?.firstArtboard = seconds
+                }
+            }
+        }
+        if isGenerating, !tree.isEmpty, streamingArtboardIDs.contains(id),
+           generationTiming.firstArtboard == nil {
+            generationTiming.firstArtboard = generationElapsed
+        }
         trees[id] = tree
         artboardErrors[id] = nil
         if expandedLayers.isEmpty || !expandedLayers.contains(LayerID.artboard(id)) {
@@ -866,7 +892,7 @@ final class ProjectSession {
         var next = document
         next.resizeArtboard(id, height: target)
         document = next
-        persist()
+        persist(touch: false)
     }
 
     /// 改画板尺寸（周围的画板自动让开，保持原来的间距）
@@ -954,14 +980,18 @@ final class ProjectSession {
     }
 
     func deletePage(_ id: UUID) {
-        guard isEditable, document.pages.count > 1 else { return }
+        guard isEditable, document.pages.count > 1, !isGenerating || id != generationPageID else { return }
         commit { $0.pages.removeAll { $0.id == id } }
-        if currentPageID == id { currentPageID = document.pages.first?.id }
+        if currentPageID == id {
+            currentPageID = document.pages.first?.id
+            draftScopeIDs = []
+        }
         clearSelection()
     }
 
     func switchPage(_ id: UUID) {
         currentPageID = id
+        draftScopeIDs = []
         clearSelection()
         DispatchQueue.main.async { [weak self] in self?.zoomToFit() }
     }
@@ -1007,9 +1037,9 @@ final class ProjectSession {
         updateLivePreview()
     }
 
-    private func persist() {
+    private func persist(touch: Bool = true) {
         let doc = document
-        app.updateProject(projectID) { $0.document = doc }
+        app.updateProject(projectID, touch: touch) { $0.document = doc }
     }
 
     func undo() {
@@ -1123,14 +1153,24 @@ final class ProjectSession {
     /// - Parameter useSelection: 来自画布上的「询问 AI」：把选中的画板 / 元素作为修改目标；
     ///   选中的是元素时，AI 只返回这个元素，生成后直接替换
     func send(useSelection: Bool = false) {
+        send(useSelection: useSelection, preserving: [])
+    }
+
+    private func send(useSelection: Bool, preserving: Set<String>) {
         guard useSelection ? canAsk : canSend, let project else { return }
         guard let profile = provider else {
             status = "请先在设置中添加模型来源"
             return
         }
 
+        let started = ContinuousClock.now
         let text = (useSelection ? askDraft : draft).trimmed
-        let comments = useSelection ? [] : pendingComments
+        let boards = document.page(currentPageID)?.artboards ?? []
+        let explicitScope = useSelection ? [] : draftScopeIDs.intersection(boards.map(\.id))
+        let comments = useSelection ? [] : pendingComments.filter { comment in
+            explicitScope.isEmpty || boards.contains { explicitScope.contains($0.id) && commentTargets(comment, board: $0) }
+        }
+        if !explicitScope.isEmpty, text.isEmpty, comments.isEmpty, draftAttachments.isEmpty { return }
         let attachments: [ChatAttachment]
         do {
             attachments = useSelection ? [] : try AttachmentImporter.includingPastedDocuments(in: text, attachments: draftAttachments)
@@ -1147,12 +1187,15 @@ final class ProjectSession {
             attachments: attachments,
             comments: comments
         )
+        userMessage.scopeIDs = explicitScope.isEmpty ? nil : explicitScope
+        userMessage.requestPageID = pageID
         if let target, let board = document.artboard(target.artboardID) {
             userMessage.target = MessageTarget(artboardID: board.id, artboardName: board.name,
                                                elementKind: props?.kind, elementName: props.map(Self.displayName),
                                                selector: props?.selector)
         }
-        let assistant = ChatMessage(role: .assistant, text: "", providerName: "\(profile.name) · \(profile.displayModel)")
+        let assistant = ChatMessage(role: .assistant, text: "", providerName: "\(profile.name) · \(profile.displayModel)",
+                                    generationInProgress: true)
 
         Task {
             var context: DesignPrompt.SelectionContext?
@@ -1182,24 +1225,31 @@ final class ProjectSession {
                 profile: profile,
                 pageID: pageID,
                 selection: context,
-                commentsOnly: text.isEmpty && attachments.isEmpty
+                commentsOnly: text.isEmpty && attachments.isEmpty, scopeIDs: userMessage.scopeIDs,
+                preserving: preserving
             )
             startGeneration(request: request, user: userMessage, assistant: assistant, profile: profile,
                             pageID: pageID, target: target?.artboardID, element: request.elementEdit ? elementTarget : nil,
-                            fromAskBar: useSelection)
+                            fromAskBar: useSelection, preserving: preserving, started: started)
         }
     }
 
     private func startGeneration(request: LLMRequest, user: ChatMessage, assistant: ChatMessage,
                                  profile: ProviderProfile, pageID: UUID?, target: UUID?,
-                                 element: (selection: CanvasSelection, source: String)? = nil, fromAskBar: Bool = false) {
-        let resolved = Set(user.comments.map(\.id))
+                                 element: (selection: CanvasSelection, source: String)? = nil, fromAskBar: Bool = false,
+                                 preserving: Set<String>, started: ContinuousClock.Instant) {
+        generationStartedAt = started
+        generationScopeIDs = user.scopeIDs
+        pendingFirstArtboard = nil
+        checkpoint = nil
+        generationTiming = GenerationTiming(total: 0)
+        generationScope = user.scopeIDs.map { ids in
+            Set((document.page(pageID)?.artboards ?? []).filter { ids.contains($0.id) }.map { $0.name.trimmed.lowercased() })
+        }
+        preservedBoards = Set(preserving.map { $0.trimmed.lowercased() })
         app.updateProject(projectID) { p in
             p.messages.append(user)
             p.messages.append(assistant)
-            for i in p.comments.indices where resolved.contains(p.comments[i].id) {
-                p.comments[i].resolved = true
-            }
             if p.providerID == nil { p.providerID = profile.id }
         }
 
@@ -1232,7 +1282,7 @@ final class ProjectSession {
 
         let llm: any LLMProvider
         do {
-            llm = try ProviderFactory.make(profile)
+            llm = try app.makeProvider(profile)
         } catch {
             task = Task { await finish(messageID: assistant.id, error: error) }
             return
@@ -1260,6 +1310,9 @@ final class ProjectSession {
     private func handle(_ event: LLMEvent) {
         switch event {
         case .text(let delta):
+            if generationTiming.firstText == nil, !delta.trimmed.isEmpty {
+                generationTiming.firstText = generationElapsed
+            }
             streamingText += delta
             if !streamingArtifactStarted {
                 streamingArtifactStarted = HTMLExtractor.fenceStarted(streamingText)
@@ -1289,18 +1342,45 @@ final class ProjectSession {
         return streamingArtboardIDs.subtracting(savedIDs)
     }
 
+    private var generationElapsed: Double {
+        guard let start = generationStartedAt else { return 0 }
+        return elapsed(since: start)
+    }
+
+    private func elapsed(since start: ContinuousClock.Instant) -> Double {
+        let elapsed = start.duration(to: .now).components
+        return Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+    }
+
+    private func eligibleOutput(_ output: ParsedArtboard) -> Bool {
+        guard let name = output.name?.trimmed.lowercased() else {
+            return generationScope == nil && preservedBoards.isEmpty
+        }
+        if preservedBoards.contains(name) { return false }
+        return generationScope?.contains(name) ?? true
+    }
+
     private func updateLivePreview() {
         guard generationElement == nil else { return }
-        let parsed = ArtboardParser.previewable(streamingText)
-        // 共用样式写完整后立即生效（它在画板代码之前输出）
-        let shared = ArtboardParser.sharedCSS(streamingText).flatMap { $0.complete ? $0.css : nil }
+        let output = ArtboardParser.designOutput(streamingText)
+        let parsed = output.boards.filter { ($0.complete || $0.html.count >= 300) && eligibleOutput($0) }
+        let shared = generationScope == nil && preservedBoards.isEmpty ? output.css : nil
+        if let messageID = streamingMessageID,
+           let recovery = recovery(for: parsed.filter(\.complete), sharedCSS: shared), recovery != checkpoint {
+            checkpoint = recovery
+            app.updateProject(projectID, touch: false) { project in
+                guard let i = project.messages.firstIndex(where: { $0.id == messageID }) else { return }
+                project.messages[i].text = ProjectTitle.splitReply(streamingText).body
+                project.messages[i].recovery = recovery
+            }
+        }
         guard !parsed.isEmpty || shared != nil else { return }
         var live = liveDocument ?? document
         let before = live.page(generationPageID)?.artboards.count ?? 0
         let sharedChanged = shared.map { live.setSharedCSS($0, in: generationPageID) } ?? false
         let changed = parsed.isEmpty ? [] : live.merge(parsed, into: generationPageID, kind: kind,
                                                        fallbackTarget: generationTarget,
-                                                       previewArtboardIDs: generatedPreviewIDs)
+                                                       previewArtboardIDs: generatedPreviewIDs, restrictingTo: generationScopeIDs)
         guard !changed.isEmpty || sharedChanged else { return }
         liveDocument = live
         streamingArtboardIDs.formUnion(changed)
@@ -1320,13 +1400,12 @@ final class ProjectSession {
         let cancelled = wasCancelled
 
         var error = generationError
-        let parsed = ArtboardParser.parse(text)
-        var outputs = generationElement == nil ? parsed.filter(\.complete) : []
-        var truncated = false
-        if generationElement == nil, error == nil, !cancelled,
-           let last = parsed.last, !last.complete, last.html.count > 400 {
-            outputs.append(last)
-            truncated = true
+        let designOutput = ArtboardParser.designOutput(text)
+        let parsed = designOutput.boards
+        let eligible = parsed.filter(eligibleOutput)
+        let outputs = generationElement == nil ? eligible.filter(\.complete) : []
+        if generationElement == nil, error == nil, !cancelled, eligible.contains(where: { !$0.complete }) {
+            error = LLMError.invalidResponse("生成在画板完成前结束。")
         }
 
         var elementEdit: (target: CanvasSelection, source: String, content: String, isPatch: Bool)?
@@ -1343,27 +1422,42 @@ final class ProjectSession {
         }
 
         // 画布共用样式：只采用完整输出的代码块（只改整体风格时，回复里可能只有它）
-        let sharedCSS = generationElement == nil
-            ? ArtboardParser.sharedCSS(text).flatMap { $0.complete ? $0.css : nil } : nil
+        let sharedCSS = generationElement == nil && generationScope == nil && preservedBoards.isEmpty
+            ? designOutput.css : nil
 
         var newVersion: DesignVersion?
+        var changedBoards: [Artboard] = []
         if error == nil, !outputs.isEmpty || sharedCSS != nil {
             // 保留已预览画板的 ID。中途取消时，从原文档合并完整结果，避免提交半张画板。
             var merged = outputs.count == parsed.count ? (liveDocument ?? document) : document
             if let sharedCSS { merged.setSharedCSS(sharedCSS, in: generationPageID) }
             merged.merge(outputs, into: generationPageID, kind: kind, fallbackTarget: generationTarget,
-                         previewArtboardIDs: generatedPreviewIDs)
+                         previewArtboardIDs: generatedPreviewIDs, restrictingTo: generationScopeIDs)
+            if let page = merged.page(generationPageID), !outputs.isEmpty {
+                let original = Dictionary(uniqueKeysWithValues: (document.page(generationPageID)?.artboards ?? []).map { ($0.id, $0) })
+                changedBoards = page.artboards.filter { board in
+                    guard let old = original[board.id] else { return true }
+                    return old.html != board.html || old.width != board.width || old.autoHeight != board.autoHeight
+                        || (!board.fitsContent(in: kind) && old.height != board.height)
+                }
+            }
             commit { $0 = merged }
             let next = (project?.versions.map(\.number).max() ?? 0) + 1
             newVersion = DesignVersion(number: next, document: document,
-                                       summary: DesignPrompt.summary(from: text), truncated: truncated)
+                                       summary: DesignPrompt.summary(from: text))
             if generationStartedEmpty, !viewportAdjustedDuringGeneration {
                 DispatchQueue.main.async { [weak self] in self?.zoomToFit() }
             }
         }
 
+        let recovery = error == nil ? nil : recovery(for: outputs, sharedCSS: sharedCSS)
         app.updateProject(projectID) { p in
             guard let i = p.messages.firstIndex(where: { $0.id == messageID }) else { return }
+            p.messages[i].generationInProgress = nil
+            p.messages[i].recovery = recovery
+            if i > 0 {
+                resolveComments(in: &p, sent: p.messages[i - 1].comments, changedBoards: changedBoards)
+            }
             if error == nil, !cancelled, p.needsTitleSummary, let title = reply.title,
                !app.regeneratingTitles.contains(projectID) {
                 p.name = title
@@ -1383,6 +1477,14 @@ final class ProjectSession {
         if let elementEdit {
             await applyElementEdit(elementEdit.content, isPatch: elementEdit.isPatch, to: elementEdit.target,
                                    source: elementEdit.source, messageID: messageID, reply: text)
+        }
+        generationTiming.total = generationElapsed
+        let finalTiming = generationTiming
+        if finalTiming.firstArtboard == nil, let started = generationStartedAt, !changedBoards.isEmpty {
+            pendingFirstArtboard = (messageID, started, Set(changedBoards.map(\.id)))
+        }
+        app.updateProject(projectID, touch: false) { p in
+            if let index = p.messages.firstIndex(where: { $0.id == messageID }) { p.messages[index].generation = finalTiming }
         }
         isGenerating = false
         app.persistence.setGenerating(projectID, false)
@@ -1443,12 +1545,78 @@ final class ProjectSession {
         needsThumbnail = true
     }
 
+    private func recovery(for boards: [ParsedArtboard], sharedCSS: String?) -> GenerationRecovery? {
+        guard let generationPageID, !boards.isEmpty || sharedCSS != nil else { return nil }
+        return GenerationRecovery(pageID: generationPageID, targetID: generationTarget, boardNames: boards.map(\.name),
+                                  includesSharedStyles: sharedCSS != nil, scopeIDs: generationScopeIDs)
+    }
+
+    private func commentTargets(_ comment: CanvasComment, board: Artboard) -> Bool {
+        if let id = comment.artboardID { return id == board.id }
+        return comment.artboardName == board.name
+    }
+
+    private func resolveComments(in project: inout Project, sent: [CanvasComment], changedBoards: [Artboard]) {
+        let ids = Set(sent.filter { comment in
+            changedBoards.contains { commentTargets(comment, board: $0) }
+        }.map(\.id))
+        for i in project.comments.indices where ids.contains(project.comments[i].id) {
+            project.comments[i].resolved = true
+        }
+    }
+
+    func keepCompletedArtboards(message: ChatMessage) {
+        guard !isGenerating, message.versionID == nil, let recovery = message.recovery,
+              document.pages.contains(where: { $0.id == recovery.pageID }) else { return }
+        let names = Set(recovery.boardNames)
+        let boards = ArtboardParser.parse(message.text).filter { $0.complete && names.contains($0.name) }
+        let css = recovery.includesSharedStyles
+            ? ArtboardParser.sharedCSS(message.text).flatMap { $0.complete ? $0.css : nil } : nil
+        var merged = document
+        if let css { merged.setSharedCSS(css, in: recovery.pageID) }
+        let ids = merged.merge(boards, into: recovery.pageID, kind: kind, fallbackTarget: recovery.targetID,
+                               restrictingTo: recovery.scopeIDs)
+        let changed = ids.compactMap { merged.artboard($0) }
+        commit { $0 = merged }
+        let next = (project?.versions.map(\.number).max() ?? 0) + 1
+        let version = DesignVersion(number: next, document: document, summary: "保留已完成的生成结果")
+        app.updateProject(projectID) { p in
+            guard let i = p.messages.firstIndex(where: { $0.id == message.id }) else { return }
+            p.messages[i].versionID = version.id
+            p.versions.append(version)
+            p.currentVersionID = version.id
+            if i > 0 { resolveComments(in: &p, sent: p.messages[i - 1].comments, changedBoards: changed) }
+        }
+        if currentPageID != recovery.pageID { switchPage(recovery.pageID) }
+        if selection == nil { zoomToFit() }
+        needsThumbnail = true
+    }
+
+    func retryRemaining(message: ChatMessage) {
+        guard !isGenerating, let recovery = message.recovery, message.versionID != nil,
+              let project, let index = project.messages.firstIndex(where: { $0.id == message.id }), index > 0,
+              document.pages.contains(where: { $0.id == recovery.pageID }) else { return }
+        let original = project.messages[index - 1]
+        if currentPageID != recovery.pageID { switchPage(recovery.pageID) }
+        draft = "继续完成上次未完成的部分。原需求：\n" + original.text
+        draftAttachments = original.attachments
+        draftScopeIDs = original.scopeIDs ?? []
+        let retainedVersion = project.versions.first { $0.id == message.versionID }
+        let retainedBoards = retainedVersion?.document?.page(recovery.pageID)?.artboards ?? []
+        let names = Set(recovery.boardNames.compactMap { $0 })
+        let inferred = recovery.boardNames.contains(nil) ? Set(retainedBoards.map(\.name)) : []
+        send(useSelection: false, preserving: names.union(inferred))
+    }
+
     /// 重新发送失败的那一轮
     func retry(assistantMessageID: UUID) {
         guard !isGenerating, let project,
               let ai = project.messages.firstIndex(where: { $0.id == assistantMessageID }),
               ai > 0, project.messages[ai - 1].role == .user else { return }
         let user = project.messages[ai - 1]
+        if let page = user.requestPageID, currentPageID != page,
+           document.pages.contains(where: { $0.id == page }) { switchPage(page) }
+        draftScopeIDs = user.scopeIDs ?? []
         app.updateProject(projectID) { p in
             p.messages.removeSubrange((ai - 1)...ai)
             for c in user.comments {
@@ -1490,7 +1658,8 @@ final class ProjectSession {
         let snippet = (p.text ?? "").trimmed.replacingOccurrences(of: "\n", with: " ")
         let comment = CanvasComment(selector: p.selector, tag: p.tag,
                                     snippet: String(snippet.prefix(160)), note: n,
-                                    artboardName: document.artboard(pending.artboardID)?.name)
+                                    artboardName: document.artboard(pending.artboardID)?.name,
+                                    artboardID: pending.artboardID)
         app.updateProject(projectID, touch: false) { $0.comments.append(comment) }
         pendingComment = nil
     }
@@ -1535,7 +1704,7 @@ final class ProjectSession {
     /// 在画布上高亮批注对应的元素
     func locate(_ comment: CanvasComment) {
         guard let page = currentPage,
-              let board = comment.artboardName.flatMap({ page.artboard(named: $0) }) ?? page.artboards.first else { return }
+              let board = page.artboards.first(where: { commentTargets(comment, board: $0) }) else { return }
         struct Located: Decodable { var id: Int; var rect: ElementRect }
         Task {
             if let r = await handle(for: board.id).decode(Located.self, "return window.__ds.locate(s)", ["s": comment.selector]) {

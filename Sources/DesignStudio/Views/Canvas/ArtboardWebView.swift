@@ -277,15 +277,32 @@ struct ArtboardWebView: NSViewRepresentable {
         let web = viewport.webView
         web.configuration.userContentController.removeScriptMessageHandler(forName: "ds")
         web.navigationDelegate = nil
-        coordinator.handle.isReady = false
+        coordinator.cancelPreparation()
+        if coordinator.handle.webView === web {
+            coordinator.handle.webView = nil
+            coordinator.handle.isReady = false
+        }
     }
 
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+        private static let markupCache: NSCache<NSUUID, ArtboardMarkup> = {
+            let cache = NSCache<NSUUID, ArtboardMarkup>()
+            cache.totalCostLimit = 16 * 1024 * 1024
+            return cache
+        }()
+
+        private nonisolated struct InitResult: Decodable {
+            var tree: [ElementNode]
+        }
+
         let handle: ArtboardHandle
         weak var session: ProjectSession?
         private var annotated = ""
         private var initialized = false
+        private var preparation: Task<Void, Never>?
+        private var navigation: WKNavigation?
+        private var navigationCommitted = false
         private var selectedElementIDs: [Int]
         var fit = ArtboardFit(on: false, viewportHeight: 900)
         var sharedCSS = ""
@@ -307,19 +324,49 @@ struct ArtboardWebView: NSViewRepresentable {
         }
 
         func load(_ html: String, in web: WKWebView) {
+            cancelPreparation()
             handle.loadedSource = html
             handle.isReady = false
             initialized = false
-            annotated = HTMLAnnotator.annotate(html).html
+            let key = handle.artboardID as NSUUID
+            if let markup = Self.markupCache.object(forKey: key), markup.source == html {
+                load(markup, in: web)
+                return
+            }
+
+            preparation = Task { [weak self, weak web] in
+                guard !Task.isCancelled else { return }
+                let worker = Task.detached(priority: .userInitiated) { ArtboardMarkup(source: html) }
+                let markup = await withTaskCancellationHandler {
+                    await worker.value
+                } onCancel: {
+                    worker.cancel()
+                }
+                guard !Task.isCancelled, let self, let web, self.handle.webView === web else { return }
+                Self.markupCache.setObject(markup, forKey: key, cost: markup.byteCount)
+                self.preparation = nil
+                self.load(markup, in: web)
+            }
+        }
+
+        func cancelPreparation() {
+            preparation?.cancel()
+            preparation = nil
+            navigation = nil
+            navigationCommitted = false
+        }
+
+        private func load(_ markup: ArtboardMarkup, in web: WKWebView) {
+            annotated = markup.annotated
             // 网页加载的副本：带上画布共用样式，外部样式表不阻塞渲染；
             // 编辑脚本里的源码 DOM 仍用未改动的 annotated（共用样式不会被写回画板）
-            let page = SharedStyles.compose(annotated, css: sharedCSS, live: true)
-            web.loadHTMLString(HTMLAnnotator.nonBlockingStylesheets(page), baseURL: ArtboardWebView.baseURL)
+            let page = SharedStyles.compose(markup.preview, css: sharedCSS, live: true)
+            navigation = web.loadHTMLString(page, baseURL: ArtboardWebView.baseURL)
         }
 
         /// 编辑脚本就绪（DOM 解析完成）后初始化：建立源码 DOM、回传图层树
         private func initialize() {
-            guard !initialized else { return }
+            guard !initialized, navigationCommitted, let navigation else { return }
             initialized = true
             handle.isReady = true
             let id = handle.artboardID
@@ -327,15 +374,19 @@ struct ArtboardWebView: NSViewRepresentable {
             let mode = handle.mode
             Task { [weak self] in
                 guard let self else { return }
-                struct InitResult: Decodable { var tree: [ElementNode] }
-                let r = await self.handle.decode(InitResult.self, """
+                let json = await self.handle.call("""
                     const result = window.__ds.init(s, m);
                     window.__ds.trackSelection(ids);
+                    window.__ds.setShared(css);
                     window.__ds.fitContent(on, vh);
                     return result;
                     """, ["s": source, "m": mode.rawValue, "ids": self.selectedElementIDs,
-                          "on": self.fit.on, "vh": self.fit.viewportHeight])
-                self.session?.artboardDidLoad(id, tree: r?.tree ?? [])
+                          "css": self.sharedCSS, "on": self.fit.on, "vh": self.fit.viewportHeight])
+                let tree = await Task.detached {
+                    json.flatMap { try? JSONDecoder().decode(InitResult.self, from: Data($0.utf8)).tree } ?? []
+                }.value
+                guard self.navigation === navigation else { return }
+                self.session?.artboardDidLoad(id, tree: tree)
             }
         }
 
@@ -349,8 +400,12 @@ struct ArtboardWebView: NSViewRepresentable {
             DispatchQueue.main.async { menu.popUp(positioning: nil, at: point, in: web) }
         }
 
+        func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            if self.navigation === navigation { navigationCommitted = true }
+        }
+
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            initialize()   // 兜底：正常情况下 ready 消息更早到达
+            if self.navigation === navigation { initialize() }
         }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
@@ -363,6 +418,7 @@ struct ArtboardWebView: NSViewRepresentable {
             guard let json = message.body as? String,
                   let msg = try? JSONDecoder().decode(EditorMessage.self, from: Data(json.utf8)) else { return }
             if msg.type == "ready" { initialize(); return }
+            guard navigationCommitted else { return }
             if msg.type == "contextMenu" { showContextMenu(msg, in: message.webView); return }
             session?.handleEditorMessage(msg, from: handle.artboardID)
             if msg.type == "editing", let web = message.webView {
@@ -370,6 +426,19 @@ struct ArtboardWebView: NSViewRepresentable {
                 web.window?.makeFirstResponder(web)
             }
         }
+    }
+}
+
+nonisolated private final class ArtboardMarkup: Sendable {
+    let source: String
+    let annotated: String
+    let preview: String
+    var byteCount: Int { source.utf8.count + annotated.utf8.count + preview.utf8.count }
+
+    init(source: String) {
+        self.source = source
+        annotated = HTMLAnnotator.annotate(source).html
+        preview = HTMLAnnotator.nonBlockingStylesheets(annotated)
     }
 }
 

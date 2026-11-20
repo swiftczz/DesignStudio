@@ -4,8 +4,7 @@ import AppKit
 struct HomeView: View {
     @Environment(AppModel.self) private var app
     @State private var prompt = ""
-    /// 主页只提供交互设计
-    private let kind: ProjectKind = .prototype
+    @State private var kind: ProjectKind = .prototype
     @State private var designSystemID: UUID?
     @State private var modelChoice = ModelChoice()
     @State private var attachments: [ChatAttachment] = []
@@ -59,7 +58,7 @@ struct HomeView: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 14) {
             if !attachments.isEmpty {
-                AttachmentStrip(attachments: $attachments)
+                AttachmentStrip(attachments: $attachments, provider: app.provider(for: modelChoice.providerID)?.kind)
             }
 
             TextField(kind.placeholder, text: $prompt, axis: .vertical)
@@ -73,6 +72,7 @@ struct HomeView: View {
                 .padding(.top, 4)
 
             HStack(spacing: 2) {
+                projectKindMenu
                 AttachButton { attachments += $0 }
                 DesignSystemMenu(selection: $designSystemID, compact: true)
                 ProviderMenu(selection: $modelChoice)
@@ -90,6 +90,25 @@ struct HomeView: View {
         .padding(.top, 18)
         .padding(.bottom, 12)
         .composerCard(focused: promptFocused, cornerRadius: 22)
+    }
+
+    private var projectKindMenu: some View {
+        Menu {
+            ForEach(ProjectKind.homeKinds) { option in
+                Toggle(option.title, isOn: Binding(
+                    get: { kind == option },
+                    set: { _ in kind = option }
+                ))
+            }
+        } label: {
+            ComposerChipLabel {
+                Image(systemName: kind.symbol).accessibilityHidden(true)
+                Text(kind.title)
+            }
+        }
+        .composerMenuStyle()
+        .accessibilityLabel("项目类型")
+        .accessibilityValue(kind.title)
     }
 
     @ViewBuilder private var recentProjects: some View {
@@ -126,6 +145,12 @@ struct ProjectCard: View {
     let project: Project
     @State private var hovering = false
 
+    private var projectMetadata: String {
+        let count = project.workingDocument.allArtboards.count
+        let details = "\(project.kind.title) · \(count) 个画板"
+        return project.currentVersion.map { "\(details) · v\($0.number)" } ?? details
+    }
+
     var body: some View {
         Button {
             app.route = .project(project.id)
@@ -134,6 +159,10 @@ struct ProjectCard: View {
                 ProjectThumbnail(project: project)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(project.displayName).font(.headline).lineLimit(1)
+                    Text(projectMetadata)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                     Text(project.updatedAt, format: .relative(presentation: .named))
                     .font(.caption)
                     .foregroundStyle(.secondary)

@@ -40,6 +40,7 @@ nonisolated struct ScrollMetrics: Equatable, Sendable {
 
 struct ChatPanel: View {
     @Bindable var session: ProjectSession
+    let loadsHistory: Bool
     /// 是否自动跟随到底部：用户往上翻后停止，回到底部后恢复
     @State private var followBottom = true
     /// 滚动视图顶部被窗口标题栏覆盖的高度
@@ -57,13 +58,15 @@ struct ChatPanel: View {
                                                    description: Text("描述你想要的设计，或者对当前画布提出修改。"))
                                 .padding(.top, 60)
                         }
-                        let lastReply = messages.last(where: { $0.role == .assistant })?.id
-                        ForEach(messages) { m in
-                            MessageView(message: m, session: session, isLastReply: m.id == lastReply)
-                                .id(m.id)
-                                // 新消息从下方轻轻浮入
-                                .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 12)),
-                                                        removal: .opacity))
+                        if loadsHistory {
+                            let lastReply = messages.last(where: { $0.role == .assistant })?.id
+                            ForEach(messages) { m in
+                                MessageView(message: m, session: session, isLastReply: m.id == lastReply)
+                                    .id(m.id)
+                                    // 新消息从下方轻轻浮入
+                                    .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 12)),
+                                                            removal: .opacity))
+                            }
                         }
                         Color.clear.frame(height: 1).id("bottom")
                     }
@@ -93,6 +96,9 @@ struct ChatPanel: View {
                     if followBottom { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
                 .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: loadsHistory) { _, ready in
+                    if ready && followBottom { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
                 // 拖动调整宽度后，原本停在底部的仍然停在底部
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _ in
                     if followBottom { proxy.scrollTo("bottom", anchor: .bottom) }
@@ -251,8 +257,30 @@ struct MessageView: View {
             }
 
             if let error = message.errorText {
-                ErrorCard(message: error) { session.retry(assistantMessageID: message.id) }
-                    .transition(.opacity)
+                ErrorCard(message: error, retryTitle: message.recovery != nil && message.versionID != nil ? "重试剩余部分" : "重试",
+                          keep: message.recovery != nil && message.versionID == nil
+                            ? { session.keepCompletedArtboards(message: message) } : nil) {
+                    if message.recovery != nil && message.versionID != nil {
+                        session.retryRemaining(message: message)
+                    } else {
+                        session.retry(assistantMessageID: message.id)
+                    }
+                }
+                .disabled(session.isGenerating)
+                .transition(.opacity)
+            }
+
+            if let timing = message.generation, isLastReply {
+                let format = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(1))
+                let metrics = [
+                    timing.firstText.map { "首字 \($0.formatted(format)) 秒" },
+                    timing.firstArtboard.map { "首张画板 \($0.formatted(format)) 秒" },
+                    "生成完成 \(timing.total.formatted(format)) 秒"
+                ].compactMap { $0 }.joined(separator: " · ")
+                Text(metrics)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .help("从提交生成请求开始计时。首张画板记录首次加载成功的画板。")
             }
 
             if !isStreaming || message.providerName != nil {
@@ -349,7 +377,17 @@ private struct MessageActionButtonStyle: ButtonStyle {
 /// 生成失败：浅红底 + 细边，文字用正文色便于阅读；只有可能是配置问题时才提供「打开设置」
 private struct ErrorCard: View {
     let message: String
+    let retryTitle: String
+    let keep: (() -> Void)?
     let retry: () -> Void
+
+    @ViewBuilder private var actions: some View {
+        if let keep { Button("保留已完成结果", action: keep) }
+        Button(action: retry) { Label(retryTitle, systemImage: "arrow.clockwise") }
+        if mayNeedSettings && keep == nil && retryTitle == "重试" {
+            OpenSettingsButton { Text("打开设置") }
+        }
+    }
 
     /// 应用中途退出这类错误与设置无关
     private var mayNeedSettings: Bool { !message.contains("应用在生成过程中退出") }
@@ -364,13 +402,9 @@ private struct ErrorCard: View {
                     .font(.callout)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 6) {
-                    Button(action: retry) {
-                        Label("重试", systemImage: "arrow.clockwise")
-                    }
-                    if mayNeedSettings {
-                        OpenSettingsButton { Text("打开设置") }
-                    }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) { actions }
+                    VStack(alignment: .leading, spacing: 6) { actions }
                 }
                 .controlSize(.small)
             }
@@ -574,7 +608,7 @@ struct ChatComposer: View {
             }
 
             if !session.draftAttachments.isEmpty {
-                AttachmentStrip(attachments: $session.draftAttachments)
+                AttachmentStrip(attachments: $session.draftAttachments, provider: session.provider?.kind)
             }
 
             TextField(placeholder, text: $session.draft, axis: .vertical)
@@ -587,28 +621,10 @@ struct ChatComposer: View {
                 .padding(.horizontal, 4)
                 .padding(.top, 2)
 
-            HStack(spacing: 2) {
-                AttachButton { session.draftAttachments += $0 }
-                ProviderMenu(selection: providerBinding)
-                Spacer(minLength: 8)
-                if session.isGenerating {
-                    Button {
-                        session.stop()
-                    } label: {
-                        Image(systemName: "stop.fill")
-                    }
-                    .buttonStyle(SendButtonStyle(stop: true))
-                    .help("停止（⌘.）")
-                } else {
-                    Button {
-                        session.send()
-                    } label: {
-                        Image(systemName: "arrow.up")
-                    }
-                    .buttonStyle(SendButtonStyle())
-                    .disabled(!session.canSend)
-                    .help("发送（Return；⌥Return 换行）")
-                }
+            ViewThatFits(in: .horizontal) {
+                composerActions(showsProvider: true)
+                composerActions(showsProvider: false)
+                composerActions(showsProvider: false, maximumModelWidth: 124)
             }
         }
         .padding(.horizontal, 10)
@@ -622,6 +638,67 @@ struct ChatComposer: View {
             return !picked.isEmpty
         }
         .onAppear { focused = true }
+    }
+
+    private func composerActions(showsProvider: Bool, maximumModelWidth: CGFloat? = nil) -> some View {
+        HStack(spacing: 2) {
+            AttachButton { session.draftAttachments += $0 }
+            if let boards = session.currentPage?.artboards, !boards.isEmpty {
+                scopeMenu(boards)
+            }
+            Spacer(minLength: showsProvider ? 8 : 4)
+            ProviderMenu(selection: providerBinding, showsLogo: showsProvider,
+                         showsProviderName: showsProvider, maximumTitleWidth: maximumModelWidth)
+            if session.isGenerating {
+                Button {
+                    session.stop()
+                } label: {
+                    Image(systemName: "stop.fill")
+                }
+                .buttonStyle(SendButtonStyle(stop: true))
+                .help("停止（⌘.）")
+            } else {
+                Button {
+                    session.send()
+                } label: {
+                    Image(systemName: "arrow.up")
+                }
+                .buttonStyle(SendButtonStyle())
+                .disabled(!session.canSend)
+                .help("发送（Return；⌥Return 换行）")
+            }
+        }
+    }
+
+    private func scopeMenu(_ boards: [Artboard]) -> some View {
+        let count = boards.filter { session.draftScopeIDs.contains($0.id) }.count
+        return Menu {
+            Button("整个画布") { session.draftScopeIDs = [] }
+            if session.canAskAboutSelection, session.selection?.elementID != nil {
+                Button("修改选中的元素") {
+                    session.askDraft = session.draft
+                    session.showAskAI = true
+                }
+            }
+            Divider()
+            ForEach(boards) { board in
+                Toggle(board.name, isOn: Binding(
+                    get: { session.draftScopeIDs.contains(board.id) },
+                    set: { included in
+                        if included { session.draftScopeIDs.insert(board.id) }
+                        else { session.draftScopeIDs.remove(board.id) }
+                    }))
+            }
+        } label: {
+            Label(count == 0 ? "修改范围" : "修改 \(count) 张画板",
+                  systemImage: "scope")
+                .labelStyle(.iconOnly)
+                .foregroundStyle(count == 0 ? Color.secondary : Theme.accent)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help(count == 0 ? "修改范围" : "修改 \(count) 张画板")
+        .accessibilityLabel(count == 0 ? "修改范围" : "修改 \(count) 张画板")
     }
 
     private var placeholder: String {
