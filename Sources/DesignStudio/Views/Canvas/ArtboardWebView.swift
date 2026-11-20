@@ -395,7 +395,7 @@ struct ArtboardWebView: NSViewRepresentable {
             guard let session, let web = webView ?? handle.webView else { return }
             let x = msg.x ?? 0, y = msg.y ?? 0
             let point = NSPoint(x: x, y: web.isFlipped ? y : web.bounds.height - y)
-            let menu = CanvasContextMenu.make(session: session, info: msg.info)
+            let menu = CanvasContextMenu.make(session: session, artboardID: handle.artboardID, info: msg.info)
             // 等这次脚本消息处理完再弹出（菜单会进入自己的事件循环）
             DispatchQueue.main.async { menu.popUp(positioning: nil, at: point, in: web) }
         }

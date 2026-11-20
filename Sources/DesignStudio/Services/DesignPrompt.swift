@@ -2,7 +2,24 @@ import Foundation
 
 /// 组装系统提示词与对话
 nonisolated enum DesignPrompt {
-    static func system(kind: ProjectKind, designSystem: DesignSystem?) -> String {
+    static func system(kind: ProjectKind, designSystem: DesignSystem?, allowsSharedStyles: Bool = true) -> String {
+        let sharedStylesOutput = allowsSharedStyles ? """
+        2. Then output the canvas's SHARED STYLESHEET as one fenced block with this exact info string — for every \
+        medium (websites, apps, dashboards, slides, posters…):
+           ```css shared
+           :root { design tokens: colors, fonts, type scale, radius, spacing, shadows }
+           base styles (box-sizing reset, body typography, links) and reusable classes used by 2+ artboards \
+           (.btn, .card, .tag, .nav, .input, slide/section layouts…)
+           ```
+           - It is injected before each artboard's own <style>. Reuse it directly and keep artboard-specific rules in \
+           the artboard's own <style>. Put rules used by multiple artboards in the shared stylesheet once.
+           - Plain CSS only (no @import except Google Fonts). Keep it focused: tokens, base and real shared components.
+           - When modifying, output the complete shared stylesheet again only if shared styles change. A global \
+           restyle usually needs only the shared stylesheet plus any artboards whose own styles must change.
+        """ : """
+        2. Treat the canvas's shared stylesheet as read-only. Reuse its existing rules and tokens. Keep style \
+           changes local to the requested artboards or element, and omit the shared stylesheet from the response.
+        """
         var s = """
         You are DesignStudio, a world-class product designer and senior front-end engineer working inside an \
         infinite design canvas. A design is made of ARTBOARDS arranged on the canvas — each artboard is \
@@ -16,20 +33,7 @@ nonisolated enum DesignPrompt {
         ## Output contract (very important)
         1. Begin with a short explanation (1–3 sentences) of what you designed or changed. Always write this in the \
         same language the user writes in.
-        2. Then output the canvas's SHARED STYLESHEET as one fenced block with this exact info string — for every \
-        medium (websites, apps, dashboards, slides, posters…):
-           ```css shared
-           :root { design tokens: colors, fonts, type scale, radius, spacing, shadows }
-           base styles (box-sizing reset, body typography, links) and reusable classes used by 2+ artboards \
-           (.btn, .card, .tag, .nav, .input, slide/section layouts…)
-           ```
-           - It is injected into every artboard on this canvas BEFORE the artboard's own <style>, so artboards \
-           never repeat it and never link to it. An artboard's own <style> holds only what is specific to that \
-           screen; anything used by two or more artboards belongs in the shared stylesheet.
-           - Plain CSS only (no @import except Google Fonts). Keep it focused: tokens, base and real shared components.
-           - When modifying, output the complete ```css shared block again only if shared styles change. A global \
-           restyle (palette, font, radius, density…) usually needs only the shared block plus any artboards whose \
-           own styles must change.
+        \(sharedStylesOutput)
         3. Then output each artboard as its own fenced code block with this exact info string:
            ```html artboard="<artboard name>" width=<px> height=<px>
            <!DOCTYPE html>
@@ -40,9 +44,8 @@ nonisolated enum DesignPrompt {
            - Scrolling web pages use `height=auto` instead of a number: the artboard grows to the page's full content \
            height, so all content stays visible. Do not set a fixed height or overflow:hidden on html/body for them.
            - Name artboards in the user's language (e.g. "首页", "详情", "01 封面").
-           - When modifying an existing design, output ONLY the artboards you changed or added, reusing the exact \
-           existing artboard names; unchanged artboards are kept automatically. Always output the full document of \
-           every artboard you output — never diffs or snippets.
+           - When modifying an existing design, output ONLY changed artboards within the requested scope. Add artboards \
+           only when the scope permits. Reuse the exact existing names and output a full document for each artboard.
         4. After the code blocks you may add up to 3 very short bullet suggestions for next iterations.
         5. If the request is genuinely ambiguous you may ask up to 2 clarifying questions instead of designing — but \
         prefer making sensible assumptions and designing.
@@ -79,13 +82,12 @@ nonisolated enum DesignPrompt {
         (icons), https://cdn.jsdelivr.net (small libraries such as Chart.js). Prefer inline SVG for icons and illustrations.
         - Never rely on external photos that may 404; use CSS gradients, SVG illustrations or https://picsum.photos \
         placeholders.
-        - Define key design tokens as CSS custom properties on :root in the shared stylesheet and use them everywhere.
+        - Use CSS custom properties for key design tokens. \(allowsSharedStyles ? "Define shared tokens on :root in the shared stylesheet." : "Keep new tokens or overrides local to the requested design.")
         - Realistic, specific content (no lorem ipsum). Respect the user's language for all UI copy.
         - Accessible (semantic HTML, sufficient contrast, focus states), smooth micro-interactions.
         - Do not use alert(), confirm(), prompt(), or window.open().
         - Expose 3–6 meaningful "tweaks" so the user can adjust the design live, by embedding exactly this block \
-        in the <head> of every artboard (the variables are defined in the shared stylesheet) and making sure each \
-        variable is actually used in the CSS:
+        in the <head> of every artboard and making sure each variable is actually used in the CSS:
           <script type="application/json" id="ds-tweaks">
           [{"var":"--accent","label":"Accent color","type":"color","value":"#D97757"},
            {"var":"--radius","label":"Corner radius","type":"range","min":0,"max":32,"step":1,"unit":"px","value":12},
@@ -120,10 +122,6 @@ nonisolated enum DesignPrompt {
                             commentsOnly: Bool = false, scopeIDs: Set<UUID>? = nil,
                             preserving boardNames: Set<String> = []) -> LLMRequest {
         let limits = profile.limits
-        var systemText = system(kind: project.kind, designSystem: designSystem)
-        if project.needsTitleSummary {
-            systemText += "\n\n## Project title\n" + ProjectTitle.replyInstruction
-        }
         let page = project.workingDocument.page(pageID)
         let artboards = page?.artboards ?? []
 
@@ -145,6 +143,11 @@ nonisolated enum DesignPrompt {
         let included = scoped ? artboards.filter { targetIDs.contains($0.id) } : artboards
         let elementEdit = selection?.elementEdit == true && !(selection?.elementHTML ?? "").isEmpty
             && selectedBoard != nil && included.count == 1
+        let allowsSharedStyles = scopeIDs == nil && boardNames.isEmpty && !elementEdit
+        var systemText = system(kind: project.kind, designSystem: designSystem, allowsSharedStyles: allowsSharedStyles)
+        if project.needsTitleSummary {
+            systemText += "\n\n## Project title\n" + ProjectTitle.replyInstruction
+        }
 
         // 1. 本轮消息：明确指定范围时只附相关源码
         var current = ""
@@ -168,13 +171,17 @@ nonisolated enum DesignPrompt {
         } else if !included.isEmpty {
             current += "## 当前设计\n"
             if let css = page?.sharedCSS, !css.isEmpty {
-                current += "画布共用样式（每个画板都会自动加载）。需要改共用样式时输出完整的 ```css shared 代码块：\n"
-                current += "```css shared\n\(css)\n```\n\n"
-            } else {
+                if allowsSharedStyles {
+                    current += "画布共用样式（每个画板都会自动加载）。需要改共用样式时输出完整的 ```css shared 代码块：\n"
+                    current += "```css shared\n\(css)\n```\n\n"
+                } else {
+                    current += "画布共用样式（自动加载，供参考）：\n```css\n\(css)\n```\n\n"
+                }
+            } else if allowsSharedStyles {
                 current += "这个画布还没有共用样式。本轮重写画板时，先输出 ```css shared 代码块，把各画板重复的设计变量、"
                     + "基础样式和通用组件移进去，画板里只保留自己特有的样式。\n\n"
             }
-            current += "下面是本轮涉及的画板 HTML。只输出改动或新增的画板，沿用原名称：\n\n"
+            current += "下面是本轮涉及的画板 HTML：\n\n"
             for a in included where !boardNames.contains(a.name) {
                 current += "```html artboard=\"\(a.name)\" width=\(Int(a.width)) height=\(a.autoHeight == true ? "auto" : String(Int(a.height)))\n\(a.html)\n```\n\n"
             }
@@ -219,9 +226,17 @@ nonisolated enum DesignPrompt {
             current += "\n\n（输出格式提醒：只输出一个元素修改代码块。文字或样式用 ```html element patch，"
                 + "改结构或子元素用 ```html element。）"
         } else {
-            current += "\n\n（输出格式提醒：先输出一个 ```css shared 共用样式代码块（修改时只有共用样式变了才输出），"
-                + "再把每个界面 / 每页幻灯片单独输出为一个 ```html artboard=\"名称\" width=宽 height=高 代码块，"
-                + "画板里不要重复共用样式；不要把多个界面并排画在同一个画板里；修改时只输出改动或新增的画板，沿用原名称。）"
+            current += "\n\n（输出格式提醒："
+            if allowsSharedStyles {
+                current += "先输出一个 ```css shared 共用样式代码块（修改时只有共用样式变了才输出），"
+            } else {
+                current += "省略共用样式代码块，将本轮样式改动写在对应画板内部。"
+            }
+            current += "每个界面 / 每页幻灯片单独输出为一个 ```html artboard=\"名称\" width=宽 height=高 代码块，"
+                + "画板里不要重复共用样式；不要把多个界面并排画在同一个画板里；"
+            current += scopeIDs != nil
+                ? "只输出有改动的指定画板，沿用原名称。）"
+                : "修改时只输出改动或新增的画板，沿用原名称。）"
         }
         let latest = LLMMessage(role: .user, text: current, images: newMessage.attachments.filter(\.isImage))
 

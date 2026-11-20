@@ -388,6 +388,7 @@ private struct ArtboardFrame: View {
                             .contentShape(.rect)
                             .onTapGesture { session.select(CanvasSelection(artboardID: artboard.id, elementID: nil)) }
                             .gesture(moveGesture)
+                            .contextMenu { scopeAction }
                             .pointerStyle(drag.isMoving(artboard.id) ? .grabActive : .grabIdle)
                     }
                 }
@@ -448,7 +449,12 @@ private struct ArtboardFrame: View {
         .onTapGesture(count: 2) { newName = artboard.name; renaming = true }
         .onTapGesture { session.select(CanvasSelection(artboardID: artboard.id, elementID: nil)) }
         .gesture(moveGesture)
+        .contextMenu { scopeAction }
         .pointerStyle(drag.isMoving(artboard.id) ? .grabActive : .grabIdle)
+    }
+
+    private var scopeAction: some View {
+        Button("仅修改此画板", systemImage: "scope") { session.focusChat(onArtboard: artboard.id) }
     }
 
     /// 拖动画板：属于框选的多个画板时整体移动，否则只移动这一个

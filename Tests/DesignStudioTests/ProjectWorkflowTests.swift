@@ -71,24 +71,66 @@ struct ProjectWorkflowTests {
         #expect(persistence.loadProjects().first?.id == project.id)
     }
 
-    @Test(arguments: [1, 10, 30])
-    func scopedPromptOnlyContainsRequestedBoard(_ count: Int) throws {
+    @Test(arguments: [1, 10, 30], [false, true])
+    func scopedPromptOnlyContainsRequestedBoardAndTreatsSharedCSSAsReadOnly(_ count: Int, hasSharedCSS: Bool) throws {
         let boards = (0..<count).map { i in
             Artboard(name: "Page \(i)", html: "<article>SourceMarker_\(i)_end</article>", width: 390, height: 844)
         }
-        let page = DesignPage(name: "Pages", artboards: boards)
+        let css = "body { color: #123456 }"
+        let page = DesignPage(name: "Pages", artboards: boards, sharedCSS: hasSharedCSS ? css : nil)
         var project = Project(name: "Test project", kind: .prototype)
         project.document = DesignDocument(pages: [page])
         let target = try #require(boards.last)
+        let message = ChatMessage(role: .user, text: "改标题")
+        let profile = ProviderProfile(name: "Codex", kind: .codex)
         let request = DesignPrompt.makeRequest(project: project, designSystem: nil,
-                                               newMessage: ChatMessage(role: .user, text: "改标题"),
-                                               profile: ProviderProfile(name: "Codex", kind: .codex), pageID: page.id,
+                                               newMessage: message, profile: profile, pageID: page.id,
                                                scopeIDs: [target.id])
         let prompt = request.flattenedPrompt(includeSystem: false)
         #expect(prompt.contains(target.html))
         for board in boards.dropLast() {
             #expect(!prompt.contains(board.html))
         }
+        #expect(request.system.contains("shared stylesheet as read-only"))
+        #expect(!request.flattenedPrompt(includeSystem: true).contains("```css shared"))
+        #expect(prompt.contains(css) == hasSharedCSS)
+        #expect(prompt.contains("只输出有改动的指定画板"))
+
+        let fullCanvas = DesignPrompt.makeRequest(project: project, designSystem: nil,
+                                                 newMessage: message, profile: profile, pageID: page.id)
+        #expect(fullCanvas.system.contains("```css shared"))
+        #expect(fullCanvas.messages.last?.text.contains("```css shared") == true)
+    }
+
+    @Test func focusingChatOnOneArtboardUsesOnlyItsCommentsAndKeepsTheDraft() throws {
+        let folder = try TempWorkspace.make(prefix: "chat-artboard-scope")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let app = AppModel(persistence: PersistenceController(root: folder))
+        let first = Artboard(name: "推荐", html: "<p>One</p>", width: 390, height: 844)
+        let second = Artboard(name: "计时", html: "<p>Two</p>", width: 390, height: 844)
+        var project = Project(name: "冥想", kind: .prototype)
+        project.document = DesignDocument(pages: [DesignPage(name: "画布", artboards: [first, second])])
+        project.comments = [CanvasComment(selector: "p", tag: "p", snippet: "", note: "修改文字",
+                                          artboardName: first.name, artboardID: first.id)]
+        app.projects = [project]
+        let session = app.session(for: project.id)
+        session.showChat = false
+        session.draftScopeIDs = [first.id]
+        session.draft = "调整布局"
+        let oldFocus = session.chatFocusRequest
+
+        session.focusChat(onArtboard: second.id)
+
+        #expect(session.showChat)
+        #expect(session.chatFocusRequest != oldFocus)
+        #expect(session.selection?.artboardID == second.id)
+        #expect(session.draftScopeArtboards.map(\.id) == [second.id])
+        #expect(session.draft == "调整布局")
+        #expect(session.draftComments.isEmpty)
+        session.draft = ""
+        #expect(!session.canSend)
+        session.draftScopeIDs = []
+        #expect(session.canSend)
     }
 
     @Test func failedGenerationKeepsCommentsPendingUntilCompletedBoardsAreAccepted() async throws {

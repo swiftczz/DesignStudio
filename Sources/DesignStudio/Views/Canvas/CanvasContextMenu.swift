@@ -36,7 +36,7 @@ extension String {
 /// 画布上的右键菜单（AppKit 菜单，显示快捷键；快捷键本身由应用菜单 / 画布按键处理）
 @MainActor
 enum CanvasContextMenu {
-    static func make(session: ProjectSession, info: ContextInfo?) -> NSMenu {
+    static func make(session: ProjectSession, artboardID: UUID, info: ContextInfo?) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
         let isElement = session.selection?.elementID != nil
@@ -70,6 +70,7 @@ enum CanvasContextMenu {
         }
 
         add("询问 AI…", "j", enabled: session.canAskAboutSelection) { session.showAskAI = true }
+        add("仅修改此画板") { session.focusChat(onArtboard: artboardID) }
         menu.addItem(.separator())
 
 

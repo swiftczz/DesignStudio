@@ -78,6 +78,7 @@ final class ProjectSession {
     var streamingMessageID: UUID?
     var status: String?
     var draftScopeIDs: Set<UUID> = []
+    var chatFocusRequest = UUID()
     var tweakValues: [String: String] = [:]
     var lastUsage: (input: Int, output: Int)?
 
@@ -144,8 +145,18 @@ final class ProjectSession {
 
     var pendingComments: [CanvasComment] { project?.comments.filter { !$0.resolved } ?? [] }
 
+    var draftScopeArtboards: [Artboard] {
+        document.page(currentPageID)?.artboards.filter { draftScopeIDs.contains($0.id) } ?? []
+    }
+
+    var draftComments: [CanvasComment] {
+        let boards = draftScopeArtboards
+        guard !boards.isEmpty else { return pendingComments }
+        return pendingComments.filter { comment in boards.contains { commentTargets(comment, board: $0) } }
+    }
+
     var canSend: Bool {
-        !isGenerating && (!draft.trimmed.isEmpty || !pendingComments.isEmpty || !draftAttachments.isEmpty)
+        !isGenerating && (!draft.trimmed.isEmpty || !draftAttachments.isEmpty || !draftComments.isEmpty)
     }
 
     var canAsk: Bool { !isGenerating && !askDraft.trimmed.isEmpty }
@@ -314,6 +325,16 @@ final class ProjectSession {
     }
 
     // MARK: - 选中
+
+    func focusChat(onArtboard id: UUID) {
+        guard document.page(currentPageID)?.artboards.contains(where: { $0.id == id }) == true else { return }
+        exitFullScreen()
+        select(CanvasSelection(artboardID: id, elementID: nil))
+        draftScopeIDs = [id]
+        showAskAI = false
+        showChat = true
+        chatFocusRequest = UUID()
+    }
 
     func select(_ target: CanvasSelection?) {
         selection = target
@@ -1165,12 +1186,8 @@ final class ProjectSession {
 
         let started = ContinuousClock.now
         let text = (useSelection ? askDraft : draft).trimmed
-        let boards = document.page(currentPageID)?.artboards ?? []
-        let explicitScope = useSelection ? [] : draftScopeIDs.intersection(boards.map(\.id))
-        let comments = useSelection ? [] : pendingComments.filter { comment in
-            explicitScope.isEmpty || boards.contains { explicitScope.contains($0.id) && commentTargets(comment, board: $0) }
-        }
-        if !explicitScope.isEmpty, text.isEmpty, comments.isEmpty, draftAttachments.isEmpty { return }
+        let explicitScope = useSelection ? [] : Set(draftScopeArtboards.map(\.id))
+        let comments = useSelection ? [] : draftComments
         let attachments: [ChatAttachment]
         do {
             attachments = useSelection ? [] : try AttachmentImporter.includingPastedDocuments(in: text, attachments: draftAttachments)

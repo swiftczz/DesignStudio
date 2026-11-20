@@ -582,11 +582,16 @@ struct ChatComposer: View {
     @FocusState private var focused: Bool
 
     var body: some View {
+        let comments = session.draftComments
         VStack(alignment: .leading, spacing: 10) {
-            if !session.pendingComments.isEmpty {
+            if let boards = session.document.page(session.currentPageID)?.artboards, !boards.isEmpty {
+                scopeMenu(boards)
+            }
+
+            if !comments.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
-                        ForEach(session.pendingComments) { c in
+                        ForEach(comments) { c in
                             HStack(spacing: 4) {
                                 Image(systemName: "scope")
                                 Text(c.note).lineLimit(1)
@@ -611,7 +616,7 @@ struct ChatComposer: View {
                 AttachmentStrip(attachments: $session.draftAttachments, provider: session.provider?.kind)
             }
 
-            TextField(placeholder, text: $session.draft, axis: .vertical)
+            TextField(placeholder(hasComments: !comments.isEmpty), text: $session.draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 14))
                 .lineLimit(1...8)
@@ -638,14 +643,12 @@ struct ChatComposer: View {
             return !picked.isEmpty
         }
         .onAppear { focused = true }
+        .onChange(of: session.chatFocusRequest) { _, _ in focused = true }
     }
 
     private func composerActions(showsProvider: Bool, maximumModelWidth: CGFloat? = nil) -> some View {
         HStack(spacing: 2) {
             AttachButton { session.draftAttachments += $0 }
-            if let boards = session.currentPage?.artboards, !boards.isEmpty {
-                scopeMenu(boards)
-            }
             Spacer(minLength: showsProvider ? 8 : 4)
             ProviderMenu(selection: providerBinding, showsLogo: showsProvider,
                          showsProviderName: showsProvider, maximumTitleWidth: maximumModelWidth)
@@ -671,9 +674,22 @@ struct ChatComposer: View {
     }
 
     private func scopeMenu(_ boards: [Artboard]) -> some View {
-        let count = boards.filter { session.draftScopeIDs.contains($0.id) }.count
+        let selected = session.draftScopeArtboards
+        let title = switch selected.count {
+        case 0: "整个画布"
+        case 1: "仅修改：\(selected[0].name)"
+        default: "仅修改 \(selected.count) 张画板"
+        }
         return Menu {
-            Button("整个画布") { session.draftScopeIDs = [] }
+            Button {
+                session.draftScopeIDs = []
+            } label: {
+                if selected.isEmpty {
+                    Label("整个画布", systemImage: "checkmark")
+                } else {
+                    Text("整个画布")
+                }
+            }
             if session.canAskAboutSelection, session.selection?.elementID != nil {
                 Button("修改选中的元素") {
                     session.askDraft = session.draft
@@ -690,19 +706,20 @@ struct ChatComposer: View {
                     }))
             }
         } label: {
-            Label(count == 0 ? "修改范围" : "修改 \(count) 张画板",
-                  systemImage: "scope")
-                .labelStyle(.iconOnly)
-                .foregroundStyle(count == 0 ? Color.secondary : Theme.accent)
+            Label(title, systemImage: "scope")
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+                .foregroundStyle(selected.isEmpty ? Color.secondary : Theme.accent)
+                .padding(.horizontal, 4)
         }
         .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help(count == 0 ? "修改范围" : "修改 \(count) 张画板")
-        .accessibilityLabel(count == 0 ? "修改范围" : "修改 \(count) 张画板")
+        .help(selected.count > 1 ? selected.map(\.name).joined(separator: "、") : title)
+        .accessibilityLabel("修改范围")
+        .accessibilityValue(title)
     }
 
-    private var placeholder: String {
-        if !session.pendingComments.isEmpty { return "补充说明（可选），发送后按批注修改…" }
+    private func placeholder(hasComments: Bool) -> String {
+        if hasComments { return "补充说明（可选），发送后按批注修改…" }
         return session.hasDesign ? "描述想要的修改…" : "描述你想设计的内容…"
     }
 
