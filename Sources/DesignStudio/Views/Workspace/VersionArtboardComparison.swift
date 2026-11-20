@@ -14,6 +14,9 @@ struct VersionArtboardComparison: View {
             ? VersionArtboardChange.compare(snapshot, to: session.document)
             : VersionArtboardChange.compare(earlier.map(session.versionDocument), to: snapshot)
         let selected = changes.first { $0.id == selectedID } ?? changes.first
+        let direct = changes.filter { !$0.inheritsChangedSharedStyles }
+        let shared = Dictionary(grouping: changes.filter(\.inheritsChangedSharedStyles), by: \.canvasID)
+            .values.sorted { ($0.first?.canvasName ?? "").localizedStandardCompare($1.first?.canvasName ?? "") == .orderedAscending }
 
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -30,16 +33,13 @@ struct VersionArtboardComparison: View {
             if let selected {
                 HStack(spacing: 14) {
                     List(selection: Binding(get: { selected.id }, set: { selectedID = $0 })) {
-                        ForEach(changes) { change in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(change.board.name).lineLimit(1)
-                                Text("\(change.action) · \(change.canvasName)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
+                        ForEach(direct) { change in changeRow(change) }
+                        ForEach(shared, id: \.first?.canvasID) { group in
+                            if let canvas = group.first?.canvasName {
+                                Section("共享样式 · \(canvas)（\(group.count) 张）") {
+                                    ForEach(group) { change in changeRow(change) }
+                                }
                             }
-                            .padding(.vertical, 3)
-                            .tag(change.id)
                         }
                     }
                     .frame(width: 190)
@@ -62,6 +62,18 @@ struct VersionArtboardComparison: View {
         }
         .padding(18)
         .frame(minWidth: 860, idealWidth: 980, minHeight: 500, idealHeight: 600)
+    }
+
+    private func changeRow(_ change: VersionArtboardChange) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(change.board.name).lineLimit(1)
+            Text(change.inheritsChangedSharedStyles ? change.action : "\(change.action) · \(change.canvasName)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+        .padding(.vertical, 3)
+        .tag(change.id)
     }
 
     private func preview(_ snapshot: VersionArtboardSnapshot?, title: String, restoreVersion: Int?) -> some View {
@@ -90,7 +102,7 @@ struct VersionArtboardComparison: View {
                     session.restoreArtboard(snapshot)
                     dismiss()
                 }
-                .disabled(session.isGenerating)
+                .disabled(!session.canRestoreVersion)
             }
         }
         .padding(10)

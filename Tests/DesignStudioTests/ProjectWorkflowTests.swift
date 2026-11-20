@@ -23,7 +23,8 @@ struct ProjectWorkflowTests {
         let oldDocument = DesignDocument(pages: [page])
         let newDocument = DesignDocument(pages: [newer])
         let changes = VersionArtboardChange.compare(oldDocument, to: newDocument)
-        #expect(changes.map(\.action) == ["修改", "修改", "新增", "删除"])
+        #expect(changes.map(\.action) == ["内容、尺寸、共享样式", "共享样式", "新增", "删除"])
+        #expect(changes.filter(\.inheritsChangedSharedStyles).map(\.id) == [board.id, other.id])
         let snapshot = try #require(changes.first?.before)
         #expect(snapshot.html.contains("color: red"))
         #expect(changes.first?.after?.html.contains("color: blue") == true)
@@ -237,6 +238,91 @@ struct ProjectWorkflowTests {
         #expect(!session.canSend)
         session.draftScopeIDs = []
         #expect(session.canSend)
+    }
+
+    @Test func keepsTheDraftScopeWhenSwitchingCanvasesAndBlocksDeletedTargets() throws {
+        let folder = try TempWorkspace.make(prefix: "chat-invalid-scope")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let app = AppModel(persistence: PersistenceController(root: folder))
+        let board = Artboard(name: "首页", html: "<p>Old</p>", width: 390, height: 844)
+        let page = DesignPage(name: "移动端", artboards: [board])
+        let other = DesignPage(name: "桌面")
+        var project = Project(name: "范围", kind: .prototype)
+        project.document = DesignDocument(pages: [page, other])
+        app.projects = [project]
+        let session = app.session(for: project.id)
+        session.draft = "调整首页"
+        session.focusChat(onArtboard: board.id)
+
+        session.switchPage(other.id)
+        #expect(session.draftScopeIDs == [board.id])
+        #expect(!session.canSend)
+        session.switchPage(page.id)
+        #expect(session.canSend)
+        session.deleteArtboard(board.id)
+        session.send()
+        #expect(session.draftScopeIssue?.contains("已删除") == true)
+        #expect(session.draft == "调整首页")
+        #expect(app.project(project.id)?.messages.isEmpty == true)
+        session.undo()
+        #expect(session.canSend)
+    }
+
+    @Test func retryKeepsTheOriginalTurnWhenItsTargetWasDeleted() async throws {
+        let folder = try TempWorkspace.make(prefix: "retry-deleted-target")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let app = AppModel(persistence: PersistenceController(root: folder)) { _ in InterruptedProvider() }
+        app.providers = [ProviderProfile(name: "Test", kind: .codex)]
+        let replacement = Artboard(name: "首页", html: "<p>Replacement</p>", width: 390, height: 844)
+        let page = DesignPage(name: "画布", artboards: [replacement])
+        var user = ChatMessage(role: .user, text: "改标题", requestPageID: page.id)
+        user.target = MessageTarget(artboardID: UUID(), artboardName: replacement.name, elementKind: "text", selector: "p")
+        let reply = ChatMessage(role: .assistant, text: "", errorText: "生成失败")
+        var project = Project(name: "重试", kind: .prototype)
+        project.document = DesignDocument(pages: [page])
+        project.messages = [user, reply]
+        app.projects = [project]
+        let session = app.session(for: project.id)
+        session.select(CanvasSelection(artboardID: replacement.id, elementID: nil))
+        session.draft = "保留我的草稿"
+
+        session.retry(assistantMessageID: reply.id)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while session.isPreparingRequest, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(!session.isGenerating)
+        #expect(session.requestNotice?.contains("原目标画板") == true)
+        #expect(app.project(project.id)?.messages.map(\.id) == [user.id, reply.id])
+        #expect(session.draft == "保留我的草稿")
+    }
+
+    @Test func restoresEachCanvasZoomCenterAndSelectionAfterResizing() throws {
+        let folder = try TempWorkspace.make(prefix: "canvas-viewport")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let app = AppModel(persistence: PersistenceController(root: folder))
+        let board = Artboard(name: "首页", html: "<p>First</p>", width: 390, height: 844)
+        let page = DesignPage(name: "移动端", artboards: [board])
+        let other = DesignPage(name: "桌面")
+        var project = Project(name: "视口", kind: .prototype)
+        project.document = DesignDocument(pages: [page, other])
+        app.projects = [project]
+        let session = app.session(for: project.id)
+        session.viewportDidChange(CGSize(width: 40, height: 60))
+        #expect(session.viewportSize == .zero)
+        session.viewportDidChange(CGSize(width: 1000, height: 700))
+        session.setZoom(1.25)
+        session.panBy(dx: 53, dy: -31)
+        session.select(CanvasSelection(artboardID: board.id, elementID: nil))
+        let center = session.worldPoint(CGPoint(x: 500, y: 350))
+
+        session.switchPage(other.id)
+        session.viewportDidChange(CGSize(width: 700, height: 600))
+        session.switchPage(page.id)
+        let restored = session.worldPoint(CGPoint(x: 350, y: 300))
+        #expect(session.zoom == 1.25)
+        #expect(abs(restored.x - center.x) < 0.001 && abs(restored.y - center.y) < 0.001)
+        #expect(session.selection?.artboardID == board.id)
     }
 
     @Test func failedGenerationKeepsCommentsPendingUntilCompletedBoardsAreAccepted() async throws {

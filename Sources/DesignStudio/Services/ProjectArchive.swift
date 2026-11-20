@@ -29,7 +29,7 @@ nonisolated struct ProjectArchive: Codable, Sendable {
         }
         copy.name = project.displayName
         copy.titleNeedsSummary = false
-        copy.document = document.selectingPages(pages)
+        copy.document = DesignDocument(pages: pages)
         copy.designSystemID = designSystem?.id
         copy.providerID = nil
         copy.model = nil
@@ -200,8 +200,7 @@ nonisolated struct ProjectArchive: Codable, Sendable {
     }
 
     private static func isValid(_ document: DesignDocument) -> Bool {
-        guard !document.pages.isEmpty, Set(document.pages.map(\.id)).count == document.pages.count,
-              Set(document.components.map(\.id)).count == document.components.count else { return false }
+        guard !document.pages.isEmpty, Set(document.pages.map(\.id)).count == document.pages.count else { return false }
         var artboards: Set<UUID> = []
         return document.pages.allSatisfy { page in
             page.artboards.allSatisfy { board in

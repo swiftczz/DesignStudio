@@ -3,6 +3,35 @@ import Testing
 @testable import DesignStudio
 
 struct ProjectArchiveTests {
+    @Test func importsFormerComponentInstancesAsSavedArtboardHTML() throws {
+        let folder = try TempWorkspace.make(prefix: "legacy-component-archive")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appending(path: "旧项目.designstudio")
+        let id = UUID()
+        let html = #"<button data-ds-component="\#(id)" data-ds-component-text="实例文案">实例文案</button>"#
+        let board = Artboard(name: "首页", html: html, width: 390, height: 844)
+        let page = DesignPage(name: "移动端", artboards: [board])
+        var project = Project(name: "旧项目", kind: .prototype)
+        project.document = DesignDocument(pages: [page, DesignPage(name: "桌面端")])
+        let archive = try ProjectArchive(project: project, designSystem: nil, includingHistory: false)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        var payload = try #require(try JSONSerialization.jsonObject(with: encoder.encode(archive)) as? [String: Any])
+        var savedProject = try #require(payload["project"] as? [String: Any])
+        var savedDocument = try #require(savedProject["document"] as? [String: Any])
+        savedDocument["componentLibrary"] = [["id": id.uuidString, "name": "按钮", "html": "<button>默认文案</button>"]]
+        savedProject["document"] = savedDocument
+        payload["project"] = savedProject
+        var writer = ZipWriter()
+        writer.addFile("project.json", contents: try JSONSerialization.data(withJSONObject: payload))
+        try writer.finish().write(to: url)
+
+        let imported = try ProjectArchive.read(from: url).importedCopy(existingDesignSystems: []).project
+        #expect(imported.workingDocument.artboard(board.id)?.html == html)
+        let selected = try ProjectArchive(project: imported, designSystem: nil, includingHistory: false, canvasIDs: [page.id])
+        #expect(selected.project.workingDocument.pages == [page])
+    }
+
     @Test(arguments: [false, true])
     func roundTripsEditableProjects(includingHistory: Bool) throws {
         let folder = try TempWorkspace.make(prefix: "project-archive")

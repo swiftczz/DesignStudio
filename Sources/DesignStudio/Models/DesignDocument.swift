@@ -126,7 +126,6 @@ nonisolated struct DesignPage: Codable, Identifiable, Hashable, Sendable {
 
 nonisolated struct DesignDocument: Codable, Hashable, Sendable {
     var pages: [DesignPage]
-    private(set) var componentLibrary: [ReusableComponent]?
 
     init(pages: [DesignPage] = []) {
         self.pages = pages.isEmpty ? [DesignPage(name: DesignPage.defaultName(index: 1))] : pages
@@ -134,33 +133,6 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
 
     var isEmpty: Bool { pages.allSatisfy { $0.artboards.isEmpty } }
     var allArtboards: [Artboard] { pages.flatMap(\.artboards) }
-    var components: [ReusableComponent] { componentLibrary ?? [] }
-
-    mutating func saveComponent(_ component: ReusableComponent) {
-        var library = components
-        if let index = library.firstIndex(where: { $0.id == component.id }) {
-            library[index] = component
-        } else {
-            library.append(component)
-        }
-        componentLibrary = library
-    }
-
-    mutating func removeComponent(_ id: UUID) {
-        componentLibrary?.removeAll { $0.id == id }
-    }
-
-    func selectingPages(_ selected: [DesignPage]) -> DesignDocument {
-        var copy = self
-        copy.pages = selected
-        if selected.count != pages.count {
-            let artboards = selected.flatMap(\.artboards)
-            copy.componentLibrary = componentLibrary?.filter { component in
-                artboards.contains { component.isReferenced(by: $0) }
-            }
-        }
-        return copy
-    }
     /// 所有画布的画板（HTML 已合并各自画布的共用样式）
     var composedArtboards: [Artboard] { pages.flatMap(\.composedArtboards) }
 

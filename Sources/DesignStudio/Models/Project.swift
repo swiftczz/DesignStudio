@@ -167,6 +167,8 @@ nonisolated struct ChatMessage: Codable, Identifiable, Sendable {
     var recovery: GenerationRecovery?
     var scopeIDs: Set<UUID>?
     var requestPageID: UUID?
+    var requestPageName: String?
+    var scopeArtboardNames: [UUID: String]?
     var generationInProgress: Bool?
     var wasStopped = false
     /// 通过画布上的「询问 AI」发送时，针对的画板 / 元素

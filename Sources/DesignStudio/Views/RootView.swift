@@ -78,6 +78,7 @@ struct RootView: View {
 
 struct SidebarView: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var renamingID: UUID?
     @State private var renameText = ""
     @State private var deletingID: UUID?
@@ -248,6 +249,7 @@ struct SidebarView: View {
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .animation(nil, value: selected)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .simultaneousGesture(projectDragGesture(projectID), including: selected && projectID != nil ? .all : .none)
         .listRowBackground(
@@ -264,9 +266,10 @@ struct SidebarView: View {
 
     private func projectDragGesture(_ projectID: UUID?) -> some Gesture {
         DragGesture(minimumDistance: 5, coordinateSpace: .global)
-            .updating($draggedProject) { value, state, _ in
+            .updating($draggedProject) { value, state, transaction in
                 guard let projectID, app.route == .project(projectID),
                       abs(value.translation.height) > abs(value.translation.width) else { return }
+                transaction.animation = nil
                 state = (projectID, value.translation.height)
             }
             .onEnded { value in
@@ -293,7 +296,7 @@ struct SidebarView: View {
                     .fill(.clear)
                     .frame(width: row.width, height: row.height)
                     .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 10))
-                    .scaleEffect(1.02)
+                    .scaleEffect(reduceMotion ? 1 : 1.02)
                     .position(x: row.midX, y: row.midY + drag.offset)
             }
         }

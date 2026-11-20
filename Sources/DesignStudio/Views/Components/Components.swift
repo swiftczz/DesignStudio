@@ -7,6 +7,11 @@ enum Theme {
     /// 对话正文：比系统默认正文（13pt）大一号
 }
 
+enum WorkspaceMotion {
+    static let hover = Animation.easeOut(duration: 0.12)
+    static let panel = Animation.easeOut(duration: 0.18)
+}
+
 // MARK: - 非玻璃按钮样式
 
 /// 选择类按钮（主页的设计类型）：选中为主色实心，未选中为浅底细边

@@ -2,6 +2,7 @@ import SwiftUI
 
 /// 画布底部的浮动工具栏（Liquid Glass）
 struct FloatingToolbar: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var session: ProjectSession
     @Namespace private var toolCoordinates
     @State private var toolFrames: [CanvasTool: CGRect] = [:]
@@ -14,7 +15,6 @@ struct FloatingToolbar: View {
     private let horizontalInset: CGFloat = 8
     private let optionsHeight: CGFloat = 40
     private let optionsSpacing: CGFloat = 4
-    private let snapAnimation = Animation.spring(response: 0.42, dampingFraction: 0.76)
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
@@ -84,7 +84,7 @@ struct FloatingToolbar: View {
                 divider
 
                 Button {
-                    withAnimation(.snappy) { session.showAskAI.toggle() }
+                    withAnimation(reduceMotion ? nil : WorkspaceMotion.panel) { session.showAskAI.toggle() }
                 } label: {
                     Label("询问 AI", systemImage: "sparkles")
                         .font(.callout.weight(.medium))
@@ -143,11 +143,11 @@ struct FloatingToolbar: View {
                     .strokeBorder(.primary.opacity(0.12), lineWidth: 0.5)
                     .frame(width: toolWidth, height: toolHeight)
                     .glassEffect(.regular.interactive(), in: .capsule)
-                    .scaleEffect(x: isDragging ? 1.18 : 1, y: isDragging ? 1.08 : 1)
-                    .animation(isDragging ? .easeOut(duration: 0.16) : snapAnimation, value: isDragging)
+                    .scaleEffect(x: isDragging && !reduceMotion ? 1.18 : 1, y: isDragging && !reduceMotion ? 1.08 : 1)
+                    .animation(reduceMotion ? nil : WorkspaceMotion.panel, value: isDragging)
                     .offset(x: center - toolWidth / 2)
                     // 点击和松手时滑到目标；拖动期间直接跟随指针。
-                    .animation(isDragging ? nil : snapAnimation, value: center)
+                    .animation(isDragging || reduceMotion ? nil : WorkspaceMotion.panel, value: center)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
@@ -155,8 +155,9 @@ struct FloatingToolbar: View {
         .contentShape(.rect)
         .highPriorityGesture(
             DragGesture(minimumDistance: 3, coordinateSpace: .named(coordinates))
-                .updating($dragX) { value, position, _ in
+                .updating($dragX) { value, position, transaction in
                     guard isToolDrag(value) else { return }
+                    transaction.animation = nil
                     position = value.location.x
                 }
                 .onEnded { value in
@@ -190,7 +191,7 @@ struct FloatingToolbar: View {
     }
 
     private func activate(_ tool: CanvasTool) {
-        withAnimation(.snappy(duration: 0.2)) {
+        withAnimation(reduceMotion ? nil : WorkspaceMotion.panel) {
             session.showShapePicker = tool == .rectangle && (session.tool != tool || !session.showShapePicker)
             session.tool = tool
         }
@@ -366,6 +367,7 @@ struct ImageInterior: View {
 
 /// 形状选择条：矩形 / 圆形 | 箭头 / 直线
 private struct ShapePicker: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var session: ProjectSession
 
     var body: some View {
@@ -384,7 +386,7 @@ private struct ShapePicker: View {
     private func button(_ kind: ShapeKind) -> some View {
         let selected = session.shapeKind == kind
         return Button {
-            withAnimation(.snappy(duration: 0.2)) {
+            withAnimation(reduceMotion ? nil : WorkspaceMotion.panel) {
                 session.shapeKind = kind
                 session.tool = .rectangle
                 session.showShapePicker = false
@@ -405,6 +407,7 @@ private struct ShapePicker: View {
 
 /// 鼠标停在按钮上时，在按钮上方立即显示名称（系统 help 提示要等约 1 秒）
 struct HoverName: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let text: String
     var enabled = true
     var lift: CGFloat = 0
@@ -413,7 +416,7 @@ struct HoverName: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onHover { inside in
-                withAnimation(.easeOut(duration: 0.12)) { hovering = inside }
+                withAnimation(reduceMotion ? nil : WorkspaceMotion.hover) { hovering = inside }
             }
             .overlay(alignment: .top) {
                 if hovering && enabled {
@@ -434,6 +437,7 @@ struct HoverName: ViewModifier {
 
 /// 「询问 AI」输入条：针对选中的画板 / 元素提出修改
 struct AskAIBar: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var session: ProjectSession
     @FocusState private var focused: Bool
 
@@ -445,7 +449,7 @@ struct AskAIBar: View {
                     .lineLimit(1)
                 Spacer()
                 Button {
-                    withAnimation(.snappy) { session.showAskAI = false }
+                    withAnimation(reduceMotion ? nil : WorkspaceMotion.panel) { session.showAskAI = false }
                 } label: {
                     Image(systemName: "xmark")
                 }
@@ -453,6 +457,9 @@ struct AskAIBar: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+            if let notice = session.askScopeIssue ?? session.requestNotice {
+                Text(notice).font(.caption).foregroundStyle(.secondary)
+            }
 
             HStack(alignment: .bottom, spacing: 8) {
                 TextField(placeholder, text: $session.askDraft, axis: .vertical)
@@ -477,10 +484,11 @@ struct AskAIBar: View {
     }
 
     private var targetDescription: String {
-        guard let sel = session.selection, let board = session.document.artboard(sel.artboardID) else {
+        guard let sel = session.askTargetSelection else {
             return "未选中内容：AI 会根据描述修改当前画布"
         }
-        if sel.elementID != nil, let p = session.selectedProps {
+        guard let board = session.document.artboard(sel.artboardID) else { return "原目标画板已删除" }
+        if sel.elementID != nil, sel == session.selection, let p = session.selectedProps {
             return "修改「\(board.name)」中的\(ElementKind.title(p.kind)) \(ProjectSession.displayName(p))"
         }
         return "修改画板「\(board.name)」"

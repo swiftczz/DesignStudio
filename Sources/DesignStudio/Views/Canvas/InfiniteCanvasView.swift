@@ -396,6 +396,7 @@ private struct ArtboardFrame: View {
     @State private var renaming = false
     @State private var newName = ""
     @State private var liveReady = false
+    @State private var loadFailed = false
 
     private let headerHeight: CGFloat = 26
 
@@ -427,7 +428,8 @@ private struct ArtboardFrame: View {
                 if mountsWebView {
                     ArtboardWebView(artboard: artboard, zoom: z, mode: session.editorMode(for: artboard.id),
                                     selectedElementIDs: selectedElementIDs, session: session,
-                                    onReady: { liveReady = true })
+                                    onReady: { liveReady = true; loadFailed = false },
+                                    onLoadFailed: { liveReady = false; loadFailed = true })
                 } else {
                     Color.clear
                         .contentShape(.rect)
@@ -436,12 +438,25 @@ private struct ArtboardFrame: View {
                 }
             }
                 .overlay {
-                    if showsPreview, !(mountsWebView && liveReady), session.tweakValues.isEmpty,
-                       let image = session.cachedArtboardPreview(artboard, sharedCSS: sharedCSS) {
-                        Image(nsImage: image)
-                            .resizable()
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
+                    if showsPreview, !(mountsWebView && liveReady) {
+                        Group {
+                            if session.tweakValues.isEmpty,
+                               let image = session.cachedArtboardPreview(artboard, sharedCSS: sharedCSS) {
+                                Image(nsImage: image)
+                                    .resizable()
+                                    .accessibilityHidden(true)
+                            } else {
+                                let title = loadFailed ? "画板预览载入失败" : "正在加载画板"
+                                let icon = loadFailed ? "exclamationmark.rectangle" : "rectangle.dashed"
+                                Label(title, systemImage: icon)
+                                    .labelStyle(ArtboardPlaceholderLabelStyle(showsTitle: width > 145 && height > 80))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .background(Color(nsColor: .controlBackgroundColor))
+                            }
+                        }
+                        .allowsHitTesting(false)
                     }
                 }
                 .frame(width: artboard.width * z, height: artboard.height * z)
@@ -465,7 +480,10 @@ private struct ArtboardFrame: View {
             if !active { drag.clear(artboard.id) }
         }
         .onChange(of: mountsWebView) { _, mounted in
-            if !mounted { liveReady = false }
+            if !mounted {
+                liveReady = false
+                loadFailed = false
+            }
         }
         .onDisappear { drag.clear(artboard.id) }
     }
@@ -869,13 +887,25 @@ private struct CommentNoteEditor: View {
 
 // MARK: - 顶部浮动栏
 
+private struct ArtboardPlaceholderLabelStyle: LabelStyle {
+    let showsTitle: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(spacing: 5) {
+            configuration.icon
+            if showsTitle { configuration.title }
+        }
+    }
+}
+
 private struct CanvasTopLeftBar: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var session: ProjectSession
 
     var body: some View {
         HStack(spacing: 6) {
             Button {
-                withAnimation(.snappy) { session.showChat.toggle() }
+                withAnimation(reduceMotion ? nil : WorkspaceMotion.panel) { session.showChat.toggle() }
             } label: {
                 Image(systemName: "sidebar.left")
             }

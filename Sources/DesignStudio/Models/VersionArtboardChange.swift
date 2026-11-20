@@ -24,10 +24,26 @@ nonisolated struct VersionArtboardChange: Identifiable, Sendable {
     var id: UUID { board.id }
     var board: Artboard { subject.board }
     var canvasName: String { subject.pageName }
+    var canvasID: UUID { subject.pageID }
+    var inheritsChangedSharedStyles: Bool {
+        guard let before, let after else { return false }
+        return before.pageID == after.pageID && before.sharedCSS != after.sharedCSS
+            && before.board.sharedCSSOverride == nil && after.board.sharedCSSOverride == nil
+    }
+
     var action: String {
-        if before == nil { return "新增" }
-        if after == nil { return "删除" }
-        return "修改"
+        guard let before else { return "新增" }
+        guard let after else { return "删除" }
+        let old = before.board, new = after.board
+        var changes: [String] = []
+        if old.html != new.html { changes.append("内容") }
+        if old.frame.origin != new.frame.origin { changes.append("位置") }
+        if old.frame.size != new.frame.size || old.autoHeight != new.autoHeight { changes.append("尺寸") }
+        if old.name != new.name { changes.append("名称") }
+        if before.pageID != after.pageID || before.pageName != after.pageName { changes.append("所属画布") }
+        if inheritsChangedSharedStyles { changes.append("共享样式") }
+        else if old.sharedCSSOverride != new.sharedCSSOverride || before.sharedCSS != after.sharedCSS { changes.append("样式") }
+        return changes.isEmpty ? "修改" : changes.joined(separator: "、")
     }
 
     static func compare(_ before: DesignDocument?, to after: DesignDocument) -> [Self] {

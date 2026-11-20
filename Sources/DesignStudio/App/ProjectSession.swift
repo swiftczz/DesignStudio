@@ -21,6 +21,7 @@ final class ProjectSession {
     var pan: CGPoint = CGPoint(x: 80, y: 120)
     var viewportSize: CGSize = .zero
     @ObservationIgnored private var didInitialFit = false
+    @ObservationIgnored private var pageViewports: [UUID: (zoom: Double, center: CGPoint, selection: [UUID])] = [:]
 
     // MARK: 选中与编辑
     var tool: CanvasTool = .select
@@ -52,7 +53,10 @@ final class ProjectSession {
     var showChat = true
     /// 进入项目时只显示对话栏和画布，检查器按需打开
     var showInspector = false
-    var showAskAI = false
+    var showAskAI = false {
+        didSet { if showAskAI && !oldValue { askSelection = selection } }
+    }
+    private var askSelection: CanvasSelection?
     /// 全屏（专注模式）：当前聚焦的画板；非 nil 即处于全屏
     private(set) var previewArtboardID: UUID?
     /// 全屏时展示当前页全部画板（false 为聚焦单个画板）
@@ -79,6 +83,9 @@ final class ProjectSession {
     var status: String?
     var draftScopeIDs: Set<UUID> = []
     var chatFocusRequest = UUID()
+    private(set) var chatSendScrollRequest = UUID()
+    private(set) var isPreparingRequest = false
+    var requestNotice: String?
     var tweakValues: [String: String] = [:]
     var lastUsage: (input: Int, output: Int)?
 
@@ -137,6 +144,7 @@ final class ProjectSession {
 
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
+    var canRestoreVersion: Bool { isEditable && !isGenerating && !isPreparingRequest }
     /// 生成过程中也可以平移画布、查看和修改元素；只有正在被模型重写的画板不能编辑（见 streamingArtboardIDs）
     var isEditable: Bool { true }
 
@@ -156,17 +164,42 @@ final class ProjectSession {
         document.page(currentPageID)?.artboards.filter { draftScopeIDs.contains($0.id) } ?? []
     }
 
+    var draftScopeIssue: String? {
+        scopeIssue(draftScopeIDs, on: currentPageID)
+    }
+
+    private func scopeIssue(_ ids: Set<UUID>, on pageID: UUID?) -> String? {
+        let page = pageID.flatMap { id in document.pages.first { $0.id == id } } ?? (pageID == nil ? document.pages.first : nil)
+        guard let page else { return "原画布已删除，请重新选择修改范围。" }
+        guard !ids.isSubset(of: Set(page.artboards.map(\.id))) else { return nil }
+        return ids.contains { document.artboard($0) == nil }
+            ? "所选画板已删除，请重新选择修改范围。"
+            : "所选画板在其他画布，请切回原画布或重新选择修改范围。"
+    }
+
     var draftComments: [CanvasComment] {
+        guard !draftScopeIDs.isEmpty else { return pendingComments }
+        guard draftScopeIssue == nil else { return [] }
         let boards = draftScopeArtboards
-        guard !boards.isEmpty else { return pendingComments }
         return pendingComments.filter { comment in boards.contains { commentTargets(comment, board: $0) } }
     }
 
     var canSend: Bool {
-        !isGenerating && (!draft.trimmed.isEmpty || !draftAttachments.isEmpty || !draftComments.isEmpty)
+        !isGenerating && !isPreparingRequest && draftScopeIssue == nil
+            && (!draft.trimmed.isEmpty || !draftAttachments.isEmpty || !draftComments.isEmpty)
     }
 
-    var canAsk: Bool { !isGenerating && !askDraft.trimmed.isEmpty }
+    var askTargetSelection: CanvasSelection? { showAskAI ? askSelection : selection }
+
+    var askScopeIssue: String? {
+        guard let target = askTargetSelection else { return nil }
+        guard document.artboard(target.artboardID) != nil else { return "所选画板已删除，请重新选择修改对象。" }
+        return target == selection ? nil : "选中的对象已变化，请重新打开「询问 AI」以确认目标。"
+    }
+
+    var canAsk: Bool {
+        !isGenerating && !isPreparingRequest && askScopeIssue == nil && !askDraft.trimmed.isEmpty
+    }
     /// 右键菜单「询问 AI」：有选中对象且没有在生成
     var canAskAboutSelection: Bool { selection != nil && !isGenerating }
 
@@ -293,6 +326,8 @@ final class ProjectSession {
     }
 
     func viewportDidChange(_ size: CGSize) {
+        // SwiftUI 初次布局可能先给出临时尺寸，等工具栏和侧栏有空间后再适配。
+        guard size.width > 200, size.height > 200 else { return }
         let previous = viewportSize
         viewportSize = size
         if Date() < refitUntil {
@@ -326,7 +361,7 @@ final class ProjectSession {
         savedLayout = (showChat, app.sidebarVisibility)
         previewShowsAll = showAll
         previewArtboardID = id
-        withAnimation(.snappy) {
+        withAnimation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : WorkspaceMotion.panel) {
             showChat = false
             app.sidebarVisibility = .detailOnly
         }
@@ -338,7 +373,7 @@ final class ProjectSession {
         previewArtboardID = nil
         interactivePreview = false
         if let saved = savedLayout {
-            withAnimation(.snappy) {
+            withAnimation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : WorkspaceMotion.panel) {
                 showChat = saved.chat
                 app.sidebarVisibility = saved.sidebar
             }
@@ -387,6 +422,7 @@ final class ProjectSession {
         exitFullScreen()
         select(CanvasSelection(artboardID: id, elementID: nil))
         draftScopeIDs = [id]
+        requestNotice = nil
         showAskAI = false
         showChat = true
         chatFocusRequest = UUID()
@@ -547,17 +583,15 @@ final class ProjectSession {
 
     // MARK: - 元素编辑
 
-    private func apply(_ r: EditResult, artboardID: UUID, update: (inout DesignDocument) -> Void = { _ in }) {
+    private func apply(_ r: EditResult, artboardID: UUID) {
         if let tree = r.tree { trees[artboardID] = tree }
-        multiSelection = r.multi ?? []
         if let source = r.source {
             let clean = HTMLAnnotator.strip(source)
             handle(for: artboardID).loadedSource = clean   // 网页已是最新状态，不必重新加载
-            commit {
-                $0.updateArtboard(artboardID) { $0.html = clean }
-                update(&$0)
-            }
+            commit { $0.updateArtboard(artboardID) { $0.html = clean } }
         }
+        guard currentPage?.artboards.contains(where: { $0.id == artboardID }) == true else { return }
+        multiSelection = r.multi ?? []
         if let id = r.id {
             selection = CanvasSelection(artboardID: artboardID, elementID: id)
             selectedProps = r.props
@@ -1050,8 +1084,7 @@ final class ProjectSession {
         guard isEditable else { return }
         let page = DesignPage(name: DesignPage.defaultName(index: document.pages.count + 1))
         commit { $0.pages.append(page) }
-        currentPageID = page.id
-        clearSelection()
+        switchPage(page.id)
     }
 
     func renamePage(_ id: UUID, to name: String) {
@@ -1065,18 +1098,38 @@ final class ProjectSession {
     func deletePage(_ id: UUID) {
         guard isEditable, document.pages.count > 1, !isGenerating || id != generationPageID else { return }
         commit { $0.pages.removeAll { $0.id == id } }
-        if currentPageID == id {
-            currentPageID = document.pages.first?.id
-            draftScopeIDs = []
-        }
-        clearSelection()
+        pageViewports[id] = nil
+        if currentPageID == id, let next = document.pages.first { switchPage(next.id) }
     }
 
     func switchPage(_ id: UUID) {
+        guard id != currentPageID, let page = document.pages.first(where: { $0.id == id }) else { return }
+        let middle = CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2)
+        if let currentPageID, viewportSize.width > 0, viewportSize.height > 0,
+           document.pages.contains(where: { $0.id == currentPageID }) {
+            let boards = selectedArtboardIDs.isEmpty ? [selection?.artboardID].compactMap { $0 } : selectedArtboardIDs
+            pageViewports[currentPageID] = (zoom, worldPoint(middle), boards)
+        }
         currentPageID = id
-        draftScopeIDs = []
         clearSelection()
-        DispatchQueue.main.async { [weak self] in self?.zoomToFit() }
+        hover = nil
+        refitUntil = .distantPast
+        if let previous = pageViewports[id] {
+            zoom = previous.zoom
+            pan = CGPoint(x: middle.x - previous.center.x * zoom, y: middle.y - previous.center.y * zoom)
+            didInitialFit = true
+            let boards = previous.selection.filter { boardID in page.artboards.contains { $0.id == boardID } }
+            if boards.count == 1, let board = boards.first {
+                select(CanvasSelection(artboardID: board, elementID: nil))
+            } else if !boards.isEmpty {
+                selectArtboards(boards)
+            }
+        } else {
+            zoom = 0.5
+            pan = CGPoint(x: 80, y: 120)
+            didInitialFit = viewportSize.width > 0 && viewportSize.height > 0 && page.bounds != nil
+            zoomToFit()
+        }
     }
 
     var canRearrangeArtboards: Bool {
@@ -1145,7 +1198,7 @@ final class ProjectSession {
 
     private func reconcileSelection() {
         if let sel = selection, document.artboard(sel.artboardID) == nil { clearSelection() }
-        if let id = currentPageID, document.page(id)?.id != id { currentPageID = document.pages.first?.id }
+        if let id = currentPageID, document.page(id)?.id != id, let next = document.pages.first { switchPage(next.id) }
     }
 
     // MARK: - 键盘
@@ -1199,96 +1252,6 @@ final class ProjectSession {
         }
     }
 
-    // MARK: - 组件
-
-    func createComponent(name: String) async -> UUID? {
-        let name = name.trimmed
-        guard !name.isEmpty, !isGenerating, let selected = selection, let id = selected.elementID,
-              let props = selectedProps, props.id == id, props.componentID == nil,
-              !["html", "head", "body"].contains(props.tag) else { return nil }
-        return await withLoadedArtboard(selected.artboardID) { handle in
-            guard let capture = await handle.decode(ComponentMarkup.Capture.self, ComponentMarkup.capture,
-                                                    ["elementID": id, "defaultText": NSNull()]), !isGenerating else { return nil }
-            let component = ReusableComponent(name: name, html: capture.html, defaultText: capture.text)
-            guard let result = await handle.decode(EditResult.self, "return window.__ds.setAttr(id, name, value)",
-                                                   ["id": id, "name": "data-ds-component", "value": component.id.uuidString]),
-                  result.props?.componentID == component.id, result.source != nil else { return nil }
-            apply(result, artboardID: selected.artboardID) { $0.saveComponent(component) }
-            return component.id
-        }
-    }
-
-    func insertComponent(_ componentID: UUID, in artboardID: UUID) async -> Bool {
-        guard !isGenerating, let component = document.components.first(where: { $0.id == componentID }) else { return false }
-        return await withLoadedArtboard(artboardID) { handle in
-            let args = ["markup": component.html, "componentID": componentID.uuidString, "token": UUID().uuidString]
-            guard let result = await handle.decode(EditResult.self, ComponentMarkup.insert, args),
-                  result.props?.componentID == componentID, result.source != nil else { return false }
-            apply(result, artboardID: artboardID)
-            return true
-        } ?? false
-    }
-
-    func overrideComponentText(_ value: String?) async -> Bool {
-        guard !isGenerating, let selection, let id = selection.elementID, let props = selectedProps,
-              props.id == id, let rootID = props.componentRootElementID,
-              let component = document.components.first(where: { $0.id == props.componentID }),
-              let defaultText = component.defaultText, value?.trimmed.isEmpty != true else { return false }
-        return await withLoadedArtboard(selection.artboardID) { handle in
-            guard let result = await handle.decode(EditResult.self, "return window.__ds.setComponentText(id, value, original)",
-                                                   ["id": rootID, "value": value as Any? ?? NSNull(), "original": defaultText]),
-                  result.source != nil else { return false }
-            apply(result, artboardID: selection.artboardID)
-            return true
-        } ?? false
-    }
-
-    func updateComponent(_ component: ReusableComponent) async -> Bool {
-        guard !isGenerating, let selection, let id = selection.elementID, let props = selectedProps,
-              props.id == id, props.componentID == component.id, let rootID = props.componentRootElementID,
-              document.components.contains(where: { $0.id == component.id }) else { return false }
-        return await withLoadedArtboard(selection.artboardID) { handle in
-            let baseline = document
-            let args = ["elementID": rootID, "defaultText": component.defaultText as Any? ?? NSNull()] as [String: Any]
-            guard let capture = await handle.decode(ComponentMarkup.Capture.self, ComponentMarkup.capture, args),
-                  document == baseline, !isGenerating else { return false }
-            var updated = component
-            updated.html = capture.html
-            updated.defaultText = capture.text
-            return await rewriteComponent(component, replacingWith: updated, using: handle, baseline: baseline)
-        } ?? false
-    }
-
-    func removeComponent(_ component: ReusableComponent, using artboardID: UUID?) async -> Bool {
-        guard !isGenerating, document.components.contains(where: { $0.id == component.id }) else { return false }
-        if !document.allArtboards.contains(where: component.isReferenced) {
-            commit { $0.removeComponent(component.id) }
-            return true
-        }
-        guard let artboardID else { return false }
-        return await withLoadedArtboard(artboardID) { handle in
-            await rewriteComponent(component, replacingWith: nil, using: handle, baseline: document)
-        } ?? false
-    }
-
-    private func rewriteComponent(_ original: ReusableComponent, replacingWith replacement: ReusableComponent?,
-                                  using handle: ArtboardHandle, baseline: DesignDocument) async -> Bool {
-        let boards = baseline.allArtboards.filter { original.isReferenced(by: $0) }
-        let args: [String: Any] = ["documents": boards.map(\.html), "componentID": original.id.uuidString,
-                                   "markup": replacement?.html as Any? ?? NSNull()]
-        guard let revised = await handle.decode([String].self, ComponentMarkup.rewrite, args),
-              revised.count == boards.count, baseline == document, !isGenerating else { return false }
-        commit { doc in
-            for (board, html) in zip(boards, revised) where board.html != html {
-                doc.updateArtboard(board.id) { $0.html = html }
-            }
-            if let replacement { doc.saveComponent(replacement) }
-            else { doc.removeComponent(original.id) }
-        }
-        if let selection { select(CanvasSelection(artboardID: selection.artboardID, elementID: nil)) }
-        return true
-    }
-
     // MARK: - 版本
 
     func versionDocument(_ version: DesignVersion) -> DesignDocument {
@@ -1310,7 +1273,7 @@ final class ProjectSession {
     }
 
     func restoreArtboard(_ snapshot: VersionArtboardSnapshot) {
-        guard isEditable, !isGenerating else { return }
+        guard canRestoreVersion else { return }
         let existingPage = document.pages.firstIndex { page in page.artboards.contains { $0.id == snapshot.id } }
         let originalPage = document.pages.firstIndex { $0.id == snapshot.pageID }
         let pageIndex = existingPage ?? originalPage
@@ -1336,10 +1299,7 @@ final class ProjectSession {
             if let existingIndex { doc.pages[pageIndex].artboards[existingIndex] = restored }
             else { doc.pages[pageIndex].artboards.append(restored) }
         }
-        if currentPageID != page.id {
-            currentPageID = page.id
-            draftScopeIDs = []
-        }
+        switchPage(page.id)
         select(CanvasSelection(artboardID: restored.id, elementID: nil))
         zoomToSelection()
     }
@@ -1349,13 +1309,13 @@ final class ProjectSession {
     }
 
     func restore(_ version: DesignVersion) {
-        guard isEditable else { return }
+        guard canRestoreVersion else { return }
         let doc = versionDocument(version)
         commit { $0 = doc }
         app.updateProject(projectID) { $0.currentVersionID = version.id }
-        currentPageID = document.pages.first?.id
+        if let first = document.pages.first { switchPage(first.id) }
         clearSelection()
-        DispatchQueue.main.async { [weak self] in self?.zoomToFit() }
+        zoomToFit()
     }
 
     /// 把当前画布保存为一个版本
@@ -1380,22 +1340,13 @@ final class ProjectSession {
 
     // MARK: - AI 生成
 
+    private static let commentsOnlyPrompt = "请根据画布批注修改设计。"
+
     /// - Parameter useSelection: 来自画布上的「询问 AI」：把选中的画板 / 元素作为修改目标；
     ///   选中的是元素时，AI 只返回这个元素，生成后直接替换
     func send(useSelection: Bool = false) {
-        send(useSelection: useSelection, preserving: [])
-    }
-
-    private func send(useSelection: Bool, preserving: Set<String>) {
-        guard useSelection ? canAsk : canSend, let project else { return }
-        guard let profile = provider else {
-            status = "请先在设置中添加模型来源"
-            return
-        }
-
-        let started = ContinuousClock.now
+        guard useSelection ? canAsk : canSend else { return }
         let text = (useSelection ? askDraft : draft).trimmed
-        let explicitScope = useSelection ? [] : Set(draftScopeArtboards.map(\.id))
         let comments = useSelection ? [] : draftComments
         let attachments: [ChatAttachment]
         do {
@@ -1404,87 +1355,164 @@ final class ProjectSession {
             ExportService.presentError("无法读取参考文件", error)
             return
         }
-        let pageID = currentPageID
-        let target = useSelection ? selection : nil
-        let props = target?.elementID != nil && selectedProps?.id == target?.elementID ? selectedProps : nil
         var userMessage = ChatMessage(
             role: .user,
-            text: text.isEmpty ? (comments.isEmpty ? "请参考附件设计。" : "请根据画布批注修改设计。") : text,
+            text: text.isEmpty ? (comments.isEmpty ? "请参考附件设计。" : Self.commentsOnlyPrompt) : text,
             attachments: attachments,
             comments: comments
         )
-        userMessage.scopeIDs = explicitScope.isEmpty ? nil : explicitScope
-        userMessage.requestPageID = pageID
-        if let target, let board = document.artboard(target.artboardID) {
-            userMessage.target = MessageTarget(artboardID: board.id, artboardName: board.name,
-                                               elementKind: props?.kind, elementName: props.map(Self.displayName),
-                                               selector: props?.selector)
+        userMessage.scopeIDs = useSelection || draftScopeIDs.isEmpty ? nil : draftScopeIDs
+        userMessage.requestPageID = currentPageID
+        submit(userMessage, selection: useSelection ? askTargetSelection : nil, fromAskBar: useSelection)
+    }
+
+    private func submit(_ message: ChatMessage, selection selected: CanvasSelection? = nil,
+                        fromAskBar: Bool? = nil, replacingReply: UUID? = nil, preserving: Set<String> = []) {
+        guard !isGenerating, !isPreparingRequest, project != nil else { return }
+        guard let profile = provider else {
+            requestNotice = "请先在设置中添加模型来源。"
+            return
         }
+        let pageID = message.requestPageID ?? message.target.flatMap { document.pageID(containing: $0.artboardID) }
+            ?? currentPageID
+        if let issue = scopeIssue(message.scopeIDs ?? [], on: pageID) {
+            requestNotice = issue
+            return
+        }
+        let started = ContinuousClock.now
+        let originalDraft = fromAskBar == true ? askDraft : draft
+        let originalAttachments = draftAttachments.map(\.id)
         let assistant = ChatMessage(role: .assistant, text: "", providerName: "\(profile.name) · \(profile.displayModel)",
                                     generationInProgress: true)
+        requestNotice = nil
+        isPreparingRequest = true
 
         Task {
+            defer { isPreparingRequest = false }
+            var user = message
+            var target = selected
+            if let previous = user.target {
+                guard let boardPageID = document.pageID(containing: previous.artboardID),
+                      boardPageID == pageID else {
+                    requestNotice = "原目标画板已不存在，请重新选择修改对象。"
+                    return
+                }
+                switchPage(boardPageID)
+                guard let original = await resolve(previous) else {
+                    requestNotice = "原目标元素无法定位，请重新选择修改对象。"
+                    return
+                }
+                target = original
+            }
+
             var context: DesignPrompt.SelectionContext?
             var elementTarget: (selection: CanvasSelection, source: String)?
-            if let target, let board = document.artboard(target.artboardID) {
-                var desc: String?
-                var html: String?
-                if target.elementID != nil, let p = props {
-                    desc = "<\(p.tag)> 元素（\(ElementKind.title(p.kind))\(p.name.isEmpty ? "" : "「\(p.name)」")，选择器 `\(p.selector)`）"
-                    html = await handle(for: target.artboardID).call("return window.__ds.outer(id)", ["id": target.elementID!])
+            if let target {
+                guard let board = document.artboard(target.artboardID),
+                      document.pageID(containing: target.artboardID) == pageID else {
+                    requestNotice = "所选画板已删除或不在当前画布，请重新选择修改对象。"
+                    return
                 }
-                // <html>/<body>/<head> 不能整体替换；过大的元素也退回整画板修改
-                let replaceable = props.map { !["html", "body", "head"].contains($0.tag.lowercased()) } ?? false
-                let elementEdit = replaceable && (html.map { !$0.isEmpty && $0.count <= 60_000 } ?? false)
-                if elementEdit { elementTarget = (target, board.html) }
-                context = DesignPrompt.SelectionContext(artboardName: board.name, artboardID: board.id,
-                                                        elementDescription: desc, elementHTML: html,
-                                                        elementEdit: elementEdit, computedStyle: props?.style ?? [:])
+                if let id = target.elementID {
+                    let element = await withLoadedArtboard(board.id) { handle -> (ElementProps, String)? in
+                        guard handle.loadedSource == board.html,
+                              let props = await handle.decode(ElementProps.self, "return window.__ds.props(id)", ["id": id]),
+                              let html = await handle.call("return window.__ds.outer(id)", ["id": id]), !html.isEmpty,
+                              document.artboard(board.id)?.html == board.html else { return nil }
+                        return (props, html)
+                    }
+                    guard let (props, html) = element else {
+                        requestNotice = "所选元素无法定位，请重新选择修改对象。"
+                        return
+                    }
+                    if let kind = user.target?.elementKind, props.kind != kind {
+                        requestNotice = "原目标元素已变化，请重新选择修改对象。"
+                        return
+                    }
+                    guard !["html", "head", "body"].contains(props.tag.lowercased()), html.count <= 60_000 else {
+                        requestNotice = "这个元素范围过大，请重新选择元素，或明确选中整张画板后发送。"
+                        return
+                    }
+                    let description = "<\(props.tag)> 元素（\(ElementKind.title(props.kind)) \(Self.displayName(props))，选择器 `\(props.selector)`）"
+                    context = DesignPrompt.SelectionContext(artboardName: board.name, artboardID: board.id,
+                                                            elementDescription: description, elementHTML: html,
+                                                            elementEdit: true, computedStyle: props.style)
+                    elementTarget = (target, board.html)
+                    user.target = MessageTarget(artboardID: board.id, artboardName: board.name, elementKind: props.kind,
+                                                elementName: Self.displayName(props), selector: props.selector)
+                } else {
+                    context = DesignPrompt.SelectionContext(artboardName: board.name, artboardID: board.id)
+                    user.target = MessageTarget(artboardID: board.id, artboardName: board.name)
+                }
             }
-            guard !isGenerating else { return }
-            var snapshot = project
+
+            let restricted = target.map { Set([$0.artboardID]) } ?? user.scopeIDs
+            if let issue = scopeIssue(restricted ?? [], on: pageID) {
+                requestNotice = issue
+                return
+            }
+            guard let page = document.page(pageID), !isGenerating, var snapshot = project else { return }
+            user.requestPageID = page.id
+            user.requestPageName = user.requestPageName ?? page.displayName
+            if let ids = user.scopeIDs, user.scopeArtboardNames == nil {
+                user.scopeArtboardNames = Dictionary(uniqueKeysWithValues: page.artboards.filter { ids.contains($0.id) }.map { ($0.id, $0.name) })
+            }
+            if let replacingReply {
+                guard let index = snapshot.messages.firstIndex(where: { $0.id == replacingReply }),
+                      index > 0, snapshot.messages[index - 1].id == user.id else { return }
+                snapshot.messages.removeSubrange((index - 1)...index)
+            }
             snapshot.document = document
             let request = DesignPrompt.makeRequest(
                 project: snapshot,
-                designSystem: app.designSystem(for: project.designSystemID),
-                newMessage: userMessage,
+                designSystem: app.designSystem(for: snapshot.designSystemID),
+                newMessage: user,
                 profile: profile,
                 pageID: pageID,
                 selection: context,
-                commentsOnly: text.isEmpty && attachments.isEmpty, scopeIDs: userMessage.scopeIDs,
+                commentsOnly: user.text == Self.commentsOnlyPrompt && user.attachments.isEmpty,
+                scopeIDs: restricted,
                 preserving: preserving
             )
-            startGeneration(request: request, user: userMessage, assistant: assistant, profile: profile,
-                            pageID: pageID, target: target?.artboardID, element: request.elementEdit ? elementTarget : nil,
-                            fromAskBar: useSelection, preserving: preserving, started: started)
+            if fromAskBar == true, askDraft == originalDraft { askDraft = "" }
+            if fromAskBar == false {
+                if draft == originalDraft { draft = "" }
+                if draftAttachments.map(\.id) == originalAttachments { draftAttachments = [] }
+            }
+            if fromAskBar != nil { chatSendScrollRequest = UUID() }
+            startGeneration(request: request, user: user, assistant: assistant, profile: profile,
+                            pageID: page.id, target: target?.artboardID, element: request.elementEdit ? elementTarget : nil,
+                            scope: restricted, replacingReply: replacingReply, preserving: preserving, started: started)
         }
     }
 
     private func startGeneration(request: LLMRequest, user: ChatMessage, assistant: ChatMessage,
                                  profile: ProviderProfile, pageID: UUID?, target: UUID?,
-                                 element: (selection: CanvasSelection, source: String)? = nil, fromAskBar: Bool = false,
+                                 element: (selection: CanvasSelection, source: String)?,
+                                 scope: Set<UUID>?, replacingReply: UUID?,
                                  preserving: Set<String>, started: ContinuousClock.Instant) {
         generationStartedAt = started
-        generationScopeIDs = user.scopeIDs
+        generationScopeIDs = scope
         pendingFirstArtboard = nil
         checkpoint = nil
         generationTiming = GenerationTiming(total: 0)
-        generationScope = user.scopeIDs.map { ids in
+        generationScope = scope.map { ids in
             Set((document.page(pageID)?.artboards ?? []).filter { ids.contains($0.id) }.map { $0.name.trimmed.lowercased() })
         }
         preservedBoards = Set(preserving.map { $0.trimmed.lowercased() })
         app.updateProject(projectID) { p in
+            if let replacingReply, let index = p.messages.firstIndex(where: { $0.id == replacingReply }), index > 0 {
+                p.messages.removeSubrange((index - 1)...index)
+                let commentIDs = Set(user.comments.map(\.id))
+                for index in p.comments.indices where commentIDs.contains(p.comments[index].id) {
+                    p.comments[index].resolved = false
+                }
+            }
             p.messages.append(user)
             p.messages.append(assistant)
             if p.providerID == nil { p.providerID = profile.id }
         }
 
-        if fromAskBar {
-            askDraft = ""
-        } else {
-            draft = ""
-            draftAttachments = []
-        }
         pendingComment = nil
         showAskAI = false
         if tool == .comment { tool = .select }
@@ -1580,7 +1608,7 @@ final class ProjectSession {
 
     private func eligibleOutput(_ output: ParsedArtboard) -> Bool {
         guard let name = output.name?.trimmed.lowercased() else {
-            return generationScope == nil && preservedBoards.isEmpty
+            return (generationScope == nil || generationTarget != nil) && preservedBoards.isEmpty
         }
         if preservedBoards.contains(name) { return false }
         return generationScope?.contains(name) ?? true
@@ -1613,9 +1641,13 @@ final class ProjectSession {
         if let sel = selection, streamingArtboardIDs.contains(sel.artboardID), sel.elementID != nil {
             clearSelection()   // 选中的元素所在画板正在被重写
         }
-        if generationStartedEmpty, !viewportAdjustedDuringGeneration,
+        if generationStartedEmpty, !viewportAdjustedDuringGeneration, currentPageID == generationPageID,
            (live.page(generationPageID)?.artboards.count ?? 0) > before {
-            DispatchQueue.main.async { [weak self] in self?.zoomToFit() }
+            let pageID = generationPageID
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.currentPageID == pageID else { return }
+                self.zoomToFit()
+            }
         }
     }
 
@@ -1671,7 +1703,7 @@ final class ProjectSession {
             let next = (project?.versions.map(\.number).max() ?? 0) + 1
             newVersion = DesignVersion(number: next, document: document,
                                        summary: DesignPrompt.summary(from: text))
-            if generationStartedEmpty, !viewportAdjustedDuringGeneration {
+            if generationStartedEmpty, !viewportAdjustedDuringGeneration, currentPageID == generationPageID {
                 DispatchQueue.main.async { [weak self] in self?.zoomToFit() }
             }
         }
@@ -1822,16 +1854,18 @@ final class ProjectSession {
         guard !isGenerating, let recovery = message.recovery, message.versionID != nil,
               let project, let index = project.messages.firstIndex(where: { $0.id == message.id }), index > 0,
               document.pages.contains(where: { $0.id == recovery.pageID }) else { return }
-        let original = project.messages[index - 1]
-        if currentPageID != recovery.pageID { switchPage(recovery.pageID) }
-        draft = "继续完成上次未完成的部分。原需求：\n" + original.text
-        draftAttachments = original.attachments
-        draftScopeIDs = original.scopeIDs ?? []
+        var original = project.messages[index - 1]
+        original.id = UUID()
+        original.createdAt = Date()
+        original.requestPageID = recovery.pageID
+        original.text = "继续完成上次未完成的部分。原需求：\n" + original.text
+        let pendingIDs = Set(pendingComments.map(\.id))
+        original.comments = original.comments.filter { pendingIDs.contains($0.id) }
         let retainedVersion = project.versions.first { $0.id == message.versionID }
         let retainedBoards = retainedVersion?.document?.page(recovery.pageID)?.artboards ?? []
         let names = Set(recovery.boardNames.compactMap { $0 })
         let inferred = recovery.boardNames.contains(nil) ? Set(retainedBoards.map(\.name)) : []
-        send(useSelection: false, preserving: names.union(inferred))
+        submit(original, preserving: names.union(inferred))
     }
 
     /// 重新发送失败的那一轮
@@ -1839,37 +1873,14 @@ final class ProjectSession {
         guard !isGenerating, let project,
               let ai = project.messages.firstIndex(where: { $0.id == assistantMessageID }),
               ai > 0, project.messages[ai - 1].role == .user else { return }
-        let user = project.messages[ai - 1]
-        if let page = user.requestPageID, currentPageID != page,
-           document.pages.contains(where: { $0.id == page }) { switchPage(page) }
-        draftScopeIDs = user.scopeIDs ?? []
-        app.updateProject(projectID) { p in
-            p.messages.removeSubrange((ai - 1)...ai)
-            for c in user.comments {
-                if let idx = p.comments.firstIndex(where: { $0.id == c.id }) { p.comments[idx].resolved = false }
-            }
-        }
-        // 通过「询问 AI」发出的消息：重新选中原来的目标，仍按元素 / 画板修改
-        if let target = user.target {
-            askDraft = user.text
-            Task {
-                if let sel = await resolve(target) {
-                    select(sel)
-                    await refreshProps(sel)   // 发送时需要元素属性来判断能否按元素修改
-                }
-                send(useSelection: true)
-            }
-            return
-        }
-        draft = user.text
-        draftAttachments = user.attachments
-        send()
+        submit(project.messages[ai - 1], replacingReply: assistantMessageID)
     }
 
     func fixError(in artboardID: UUID) {
         guard let err = artboardErrors[artboardID], let board = document.artboard(artboardID) else { return }
         askDraft = "画板「\(board.name)」运行时报错：\(err)\n请修复这个问题，保持设计不变。"
         artboardErrors[artboardID] = nil
+        showAskAI = false
         select(CanvasSelection(artboardID: artboardID, elementID: nil))
         send(useSelection: true)
     }
@@ -1903,30 +1914,54 @@ final class ProjectSession {
 
     /// 在画布上重新选中消息针对的画板 / 元素
     func reveal(_ target: MessageTarget) {
+        guard let pageID = document.pageID(containing: target.artboardID) else {
+            requestNotice = "画板「\(target.artboardName)」已删除。"
+            return
+        }
+        switchPage(pageID)
+        let boardSelection = CanvasSelection(artboardID: target.artboardID, elementID: nil)
+        select(boardSelection)
+        if let board = selectedArtboard { revealIfNeeded(board) }
+        guard target.isElement || target.selector != nil else { return }
         Task {
-            if let sel = await resolve(target) {
+            let sel = await resolve(target)
+            guard selection == boardSelection, currentPageID == pageID else { return }
+            if let sel {
                 select(sel)
             } else {
-                status = "画板「\(target.artboardName)」已不存在"
+                requestNotice = "原元素无法定位，已选中它所在的画板。"
             }
         }
     }
 
-    /// 找到消息针对的画板 / 元素（元素按选择器重新定位，找不到时退回整个画板）
+    private func revealIfNeeded(_ board: Artboard) {
+        let viewport = CGRect(origin: .zero, size: viewportSize)
+        let center = CGPoint(x: board.frame.midX, y: board.frame.midY)
+        if !viewport.contains(viewPoint(center)) { zoomToFit(board.frame) }
+    }
+
+    func revealCanvas(_ id: UUID) {
+        guard document.pages.contains(where: { $0.id == id }) else {
+            requestNotice = "这条消息对应的画布已删除。"
+            return
+        }
+        switchPage(id)
+    }
+
+    /// 用保存的画板 ID 和选择器定位原目标，避免把重试发送给其他对象。
     private func resolve(_ target: MessageTarget) async -> CanvasSelection? {
-        guard let board = document.artboard(target.artboardID)
-                ?? currentPage?.artboard(named: target.artboardName) else { return nil }
-        if let page = document.pages.first(where: { $0.artboards.contains { $0.id == board.id } }), page.id != currentPageID {
-            currentPageID = page.id
+        guard let board = document.artboard(target.artboardID) else { return nil }
+        guard target.isElement || target.selector != nil else {
+            return CanvasSelection(artboardID: board.id, elementID: nil)
         }
-        struct Located: Decodable { var id: Int; var rect: ElementRect }
-        if let selector = target.selector {
-            let located = await withLoadedArtboard(board.id) {
-                await $0.decode(Located.self, "return window.__ds.locate(s)", ["s": selector])
-            }
-            if let located { return CanvasSelection(artboardID: board.id, elementID: located.id) }
+        guard let selector = target.selector, !selector.isEmpty else { return nil }
+        struct Located: Decodable { var id: Int }
+        let located = await withLoadedArtboard(board.id) {
+            await $0.decode(Located.self, """
+                return document.querySelectorAll(s).length === 1 ? window.__ds.locate(s) : null;
+                """, ["s": selector])
         }
-        return CanvasSelection(artboardID: board.id, elementID: nil)
+        return located.map { CanvasSelection(artboardID: board.id, elementID: $0.id) }
     }
 
     /// 在画布上高亮批注对应的元素

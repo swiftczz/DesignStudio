@@ -7,7 +7,6 @@ struct ProjectWorkspaceView: View {
     @Bindable var session: ProjectSession
     @State private var batchExport: CanvasExportJob?
     @State private var comparedVersion: DesignVersion?
-    @State private var showsComponents = false
     @State private var loadsWebContent = false
     /// 对话栏宽度：拖动分隔线调整，所有项目共用并记住
     @AppStorage("chatPanelWidth") private var chatWidth: Double = ChatPanelDivider.defaultWidth
@@ -15,24 +14,30 @@ struct ProjectWorkspaceView: View {
     var body: some View {
         GeometryReader { geometry in
             let stacked = geometry.size.width < 700
-            let layout = stacked ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0))
-            layout {
-                if session.showChat && !stacked {
-                    let availableWidth = max(ChatPanelDivider.minWidth, geometry.size.width - 410)
-                    let panelWidth = min(ChatPanelDivider.clamp(chatWidth), availableWidth)
-                    chat(width: panelWidth)
-                    ChatPanelDivider(width: Binding(
-                        get: { panelWidth },
-                        set: { chatWidth = min($0, availableWidth) }
-                    ))
-                        .ignoresSafeArea(.container, edges: .top)
-                }
+            let availableWidth = max(ChatPanelDivider.minWidth, geometry.size.width - 410)
+            let panelWidth = min(ChatPanelDivider.clamp(chatWidth), availableWidth)
+            let panelExtent = stacked ? min(270, geometry.size.height * 0.37) : panelWidth
+            WorkspaceLayout(stacked: stacked, panelExtent: panelExtent) {
                 InfiniteCanvasView(session: session, loadsWebContent: loadsWebContent)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .scrollEdgeEffectHidden(true, for: .top)
-                if session.showChat && stacked {
-                    Divider()
-                    chat(height: min(270, geometry.size.height * 0.37))
+                if session.showChat {
+                    ChatPanel(session: session, loadsHistory: loadsWebContent)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .overlay(alignment: stacked ? .top : .trailing) {
+                            if stacked {
+                                Divider().frame(height: 1)
+                            } else {
+                                ChatPanelDivider(width: Binding(
+                                    get: { panelWidth },
+                                    set: { chatWidth = min($0, availableWidth) }
+                                ))
+                                .frame(width: 1)
+                                .ignoresSafeArea(.container, edges: .top)
+                            }
+                        }
+                        .transition(.opacity)
+                        .zIndex(1)
                 }
             }
         }
@@ -47,9 +52,6 @@ struct ProjectWorkspaceView: View {
         .sheet(item: $comparedVersion) { version in
             VersionArtboardComparison(session: session, version: version)
         }
-        .sheet(isPresented: $showsComponents) {
-            ComponentLibraryEditor(session: session)
-        }
         .inspector(isPresented: $session.showInspector) {
             InspectorView(session: session)
                 .inspectorColumnWidth(min: 280, ideal: 320, max: 460)
@@ -62,11 +64,6 @@ struct ProjectWorkspaceView: View {
         }
         // 标题栏透明：画布一直延伸到窗口顶端
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
-    }
-
-    private func chat(width: CGFloat? = nil, height: CGFloat? = nil) -> some View {
-        ChatPanel(session: session, loadsHistory: loadsWebContent)
-            .frame(width: width, height: height)
     }
 
     private var isFullScreen: Bool { session.isFullScreen }
@@ -106,10 +103,6 @@ struct ProjectWorkspaceView: View {
         ToolbarItemGroup(placement: .primaryAction) {
             VersionHistoryButton(session: session) { comparedVersion = $0 }
             ProjectSettingsButton(session: session)
-            Button { showsComponents = true } label: {
-                Label("组件", systemImage: "square.on.square")
-            }
-            .help("创建、插入和更新项目组件")
             ExportMenu(session: session) { batchExport = $0 }
         }
 
@@ -123,6 +116,30 @@ struct ProjectWorkspaceView: View {
             }
             .help("图层 / 属性 / 代码 / 调整")
         }
+    }
+}
+
+/// 两种排列复用同一个对话和画布，保留滚动、焦点与 WebKit 状态。
+private struct WorkspaceLayout: Layout {
+    let stacked: Bool
+    let panelExtent: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let canvas = subviews.first else { return }
+        let panel = subviews.dropFirst().first
+        let extent = panel == nil ? 0 : panelExtent
+        let canvasWidth = max(0, bounds.width - (stacked ? 0 : extent))
+        let canvasHeight = max(0, bounds.height - (stacked ? extent : 0))
+        let canvasOrigin = CGPoint(x: bounds.minX + (stacked ? 0 : extent), y: bounds.minY)
+        canvas.place(at: canvasOrigin, anchor: .topLeading, proposal: ProposedViewSize(width: canvasWidth, height: canvasHeight))
+        let panelOrigin = CGPoint(x: bounds.minX, y: bounds.minY + (stacked ? canvasHeight : 0))
+        panel?.place(at: panelOrigin, anchor: .topLeading,
+                     proposal: ProposedViewSize(width: stacked ? bounds.width : extent,
+                                                height: stacked ? extent : bounds.height))
     }
 }
 
@@ -194,9 +211,9 @@ private struct VersionHistoryList: View {
                                     Button("画板变更") { onCompare(v) }
                                         .buttonStyle(.borderless)
                                     if !isCurrent {
-                                        Button("恢复") { session.restore(v) }
+                                        Button("恢复整个版本") { session.restore(v) }
                                             .buttonStyle(.borderless)
-                                            .disabled(!session.isEditable)
+                                            .disabled(!session.canRestoreVersion)
                                     }
                                 }
                                 .controlSize(.small)
@@ -204,7 +221,8 @@ private struct VersionHistoryList: View {
                             .padding(.vertical, 8)
                             .contextMenu {
                                 Button("查看画板变更") { onCompare(v) }
-                                Button("恢复到此版本") { session.restore(v) }
+                                Button("恢复整个版本") { session.restore(v) }
+                                    .disabled(!session.canRestoreVersion)
                                 Divider()
                                 Button("删除此版本", role: .destructive) { session.deleteVersion(v) }
                             }
@@ -402,6 +420,7 @@ private struct CanvasExportSheet: View {
 /// 对话栏右侧的分隔线：左右拖动调整对话栏宽度，双击恢复默认宽度。
 /// 可见的仍是 1pt 的系统分隔线，两侧各留出几 pt 的透明拖动区域
 struct ChatPanelDivider: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var width: Double
     @State private var dragStart: Double?
     @State private var hovering = false
@@ -418,7 +437,7 @@ struct ChatPanelDivider: View {
                 Rectangle()
                     .fill(Color.primary.opacity(hovering || dragStart != nil ? 0.18 : 0))
                     .frame(width: 2)
-                    .animation(.easeOut(duration: 0.15).delay(hovering ? 0.25 : 0), value: hovering)
+                    .animation(reduceMotion ? nil : WorkspaceMotion.hover.delay(hovering ? 0.25 : 0), value: hovering)
             }
             .overlay {
                 Color.clear
@@ -437,7 +456,7 @@ struct ChatPanelDivider: View {
                     )
                     // 与拖动手势并存：单独的 onTapGesture 会被拖动手势吞掉
                     .simultaneousGesture(TapGesture(count: 2).onEnded {
-                        withAnimation(.snappy(duration: 0.25)) { width = Self.defaultWidth }
+                        withAnimation(reduceMotion ? nil : WorkspaceMotion.panel) { width = Self.defaultWidth }
                     })
                     .help("拖动调整对话栏宽度，双击恢复默认")
             }

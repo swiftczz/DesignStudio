@@ -31,18 +31,22 @@ nonisolated struct ScrollMetrics: Equatable, Sendable {
     /// 停在底部时跟随新内容；用户往上滚动时停止跟随。
     /// 内容高度同时变化时的 offset 变化是布局调整（懒加载测量、流式输出），不算用户滚动
     static func shouldFollow(old: ScrollMetrics, new: ScrollMetrics, current: Bool) -> Bool {
-        if new.distanceToBottom < 40 { return true }
         if abs(new.contentHeight - old.contentHeight) > 0.5 || abs(new.width - old.width) > 0.5 { return current }
+        if new.distanceToBottom < 40 { return true }
         if new.offset < old.offset - 1 { return false }
         return current
     }
 }
 
 struct ChatPanel: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var session: ProjectSession
     let loadsHistory: Bool
     /// 是否自动跟随到底部：用户往上翻后停止，回到底部后恢复
     @State private var followBottom = true
+    @State private var hasNewReply = false
+    @State private var handledSend: UUID?
+    @State private var visibleMessageID: UUID?
     /// 滚动视图顶部被窗口标题栏覆盖的高度
     @State private var titleInset: CGFloat = 0
 
@@ -61,18 +65,17 @@ struct ChatPanel: View {
                         if loadsHistory {
                             let lastReply = messages.last(where: { $0.role == .assistant })?.id
                             ForEach(messages) { m in
-                                MessageView(message: m, session: session, isLastReply: m.id == lastReply)
+                                MessageView(message: m, session: session, isLastReply: m.id == lastReply,
+                                            animatesArrival: followBottom && m.id == session.streamingMessageID)
                                     .id(m.id)
-                                    // 新消息从下方轻轻浮入
-                                    .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 12)),
-                                                            removal: .opacity))
                             }
                         }
                         Color.clear.frame(height: 1).id("bottom")
                     }
                     .padding(16)
-                    .animation(.snappy(duration: 0.3), value: messages.count)
+                    .scrollTargetLayout()
                 }
+                .scrollPosition(id: $visibleMessageID, anchor: .top)
                 .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentInsets.top }) { _, v in titleInset = v }
                 // 窗口标题栏背景是透明的，系统不会画滚动边缘效果：自己遮住滚到标题下方的内容，
                 // 并在标题下沿做一段渐隐，避免消息和项目标题叠在一起
@@ -83,33 +86,39 @@ struct ChatPanel: View {
                 .defaultScrollAnchor(followBottom ? .bottom : nil, for: .sizeChanges)
                 .onScrollGeometryChange(for: ScrollMetrics.self, of: ScrollMetrics.init) { old, new in
                     followBottom = ScrollMetrics.shouldFollow(old: old, new: new, current: followBottom)
+                    if followBottom { hasNewReply = false }
                 }
-                // 新消息（发送）总是滚到底部；生成中的内容只在停留在底部时跟随
-                .onChange(of: messages.count) {
-                    followBottom = true
-                    withAnimation(.snappy) { proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: messages.last?.id) {
+                    let sent = handledSend != session.chatSendScrollRequest
+                    handledSend = session.chatSendScrollRequest
+                    if sent || followBottom {
+                        followBottom = true
+                        withAnimation(reduceMotion ? nil : WorkspaceMotion.panel) { proxy.scrollTo("bottom", anchor: .bottom) }
+                    } else {
+                        hasNewReply = true
+                    }
                 }
                 .onChange(of: session.streamingText.count / 240) {
-                    if followBottom { proxy.scrollTo("bottom", anchor: .bottom) }
+                    if !followBottom { hasNewReply = true }
                 }
-                .onChange(of: session.streamingThinking.count / 120) {
-                    if followBottom { proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: session.streamingMessageID) {
+                    if !followBottom { hasNewReply = true }
                 }
-                .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+                .onAppear {
+                    handledSend = session.chatSendScrollRequest
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
                 .onChange(of: loadsHistory) { _, ready in
                     if ready && followBottom { proxy.scrollTo("bottom", anchor: .bottom) }
-                }
-                // 拖动调整宽度后，原本停在底部的仍然停在底部
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _ in
-                    if followBottom { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
                 .overlay(alignment: .bottom) {
                     if !followBottom {
                         Button {
                             followBottom = true
-                            withAnimation(.snappy) { proxy.scrollTo("bottom", anchor: .bottom) }
+                            hasNewReply = false
+                            withAnimation(reduceMotion ? nil : WorkspaceMotion.panel) { proxy.scrollTo("bottom", anchor: .bottom) }
                         } label: {
-                            Label(session.isGenerating ? "回到最新" : "回到底部", systemImage: "arrow.down")
+                            Label(hasNewReply ? "有新回复 · 回到最新" : "回到最新", systemImage: "arrow.down")
                                 .font(.callout)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 6)
@@ -117,10 +126,9 @@ struct ChatPanel: View {
                         .buttonStyle(.plain)
                         .glassEffect(.regular.interactive(), in: .capsule)
                         .padding(.bottom, 10)
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        .transition(.opacity)
                     }
                 }
-                .animation(.snappy(duration: 0.2), value: followBottom)
             }
 
             ChatComposer(session: session)
@@ -169,26 +177,31 @@ struct MessageTargetChip: View {
 
 struct MessageView: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let message: ChatMessage
     @Bindable var session: ProjectSession
     /// 最后一条回复：操作栏常驻显示，且可以重新生成
     var isLastReply = false
+    var animatesArrival = false
     @State private var hovering = false
     @State private var copied = false
+    @State private var appeared = false
 
     var body: some View {
         if message.role == .user {
             userBubble
         } else {
             assistantBlock
+                .opacity(!reduceMotion && animatesArrival && !appeared ? 0 : 1)
+                .onAppear {
+                    withAnimation(reduceMotion ? nil : WorkspaceMotion.hover) { appeared = true }
+                }
         }
     }
 
     private var userBubble: some View {
         VStack(alignment: .trailing, spacing: 6) {
-            if let target = message.target {
-                MessageTargetChip(target: target) { session.reveal(target) }
-            }
+            messageScope
             if !message.attachments.isEmpty {
                 AttachmentThumbs(attachments: message.attachments)
             }
@@ -208,6 +221,42 @@ struct MessageView: View {
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 48)
+    }
+
+    @ViewBuilder
+    private var messageScope: some View {
+        if let target = message.target {
+            MessageTargetChip(target: target) { session.reveal(target) }
+        } else if let ids = message.scopeIDs, !ids.isEmpty {
+            let targets = ids.map { id in
+                MessageTarget(artboardID: id, artboardName: message.scopeArtboardNames?[id]
+                              ?? session.document.artboard(id)?.name ?? "已删除的画板")
+            }.sorted { $0.artboardName.localizedStandardCompare($1.artboardName) == .orderedAscending }
+            if targets.count == 1, let target = targets.first {
+                MessageTargetChip(target: target) { session.reveal(target) }
+            } else {
+                Menu {
+                    ForEach(targets, id: \.artboardID) { target in
+                        Button(target.artboardName) { session.reveal(target) }
+                    }
+                } label: {
+                    Label("\(targets.count) 张画板", systemImage: "scope").font(.caption)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help(targets.map(\.artboardName).joined(separator: "、"))
+            }
+        } else if let id = message.requestPageID {
+            let name = message.requestPageName ?? session.document.pages.first { $0.id == id }?.displayName ?? "已删除的画布"
+            Button { session.revealCanvas(id) } label: {
+                Label("整个画布 · \(name)", systemImage: "scope")
+                    .font(.caption)
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("定位画布「\(name)」")
+        }
     }
 
     private var isStreaming: Bool { session.streamingMessageID == message.id }
@@ -290,8 +339,6 @@ struct MessageView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(.rect)
         .onHover { hovering = $0 }
-        .animation(.snappy(duration: 0.25), value: isStreaming)
-        .animation(.snappy(duration: 0.25), value: message.versionID)
     }
 
     /// 模型名仅随悬停显示。最后一条回复的操作按钮常驻。
@@ -304,10 +351,10 @@ struct MessageView: View {
                         Button {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(display, forType: .string)
-                            withAnimation(.snappy(duration: 0.2)) { copied = true }
+                            withAnimation(reduceMotion ? nil : WorkspaceMotion.hover) { copied = true }
                             Task {
                                 try? await Task.sleep(for: .seconds(1.5))
-                                withAnimation(.snappy(duration: 0.2)) { copied = false }
+                                withAnimation(reduceMotion ? nil : WorkspaceMotion.hover) { copied = false }
                             }
                         } label: {
                             Image(systemName: copied ? "checkmark" : "doc.on.doc")
@@ -330,7 +377,7 @@ struct MessageView: View {
                 .opacity(showsActions ? 1 : 0)
                 .allowsHitTesting(showsActions)
                 .accessibilityHidden(!showsActions)
-                .animation(.easeOut(duration: 0.15), value: showsActions)
+                .animation(reduceMotion ? nil : WorkspaceMotion.hover, value: showsActions)
             }
             if let name = message.providerName {
                 HStack(spacing: 5) {
@@ -342,7 +389,7 @@ struct MessageView: View {
                 .padding(.leading, 6)
                 .opacity(hovering ? 1 : 0)
                 .accessibilityHidden(!hovering)
-                .animation(.easeOut(duration: 0.15), value: hovering)
+                .animation(reduceMotion ? nil : WorkspaceMotion.hover, value: hovering)
             }
         }
         .padding(.leading, -5)
@@ -429,8 +476,6 @@ private struct StreamingIndicator: View {
             if lines > 0 {
                 Text("· \(lines) 行")
                     .monospacedDigit()
-                    .contentTransition(.numericText())
-                    .animation(.snappy, value: lines)
                     .foregroundStyle(.tertiary)
             }
         }
@@ -444,6 +489,7 @@ private struct StreamingIndicator: View {
 
 /// 可折叠的思考过程（思维链摘要）：思考进行中默认展开，之后可手动折叠
 private struct ThinkingSection: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let text: String
     let isThinking: Bool
     @State private var expanded: Bool?
@@ -458,7 +504,7 @@ private struct ThinkingSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
-                withAnimation(.snappy(duration: 0.2)) { expanded = !isExpanded }
+                withAnimation(reduceMotion ? nil : WorkspaceMotion.panel) { expanded = !isExpanded }
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "brain")
@@ -512,6 +558,7 @@ private struct ThinkingSection: View {
 }
 
 private struct VersionChip: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let version: DesignVersion
     @Bindable var session: ProjectSession
 
@@ -551,7 +598,7 @@ private struct VersionChip: View {
                 Spacer(minLength: 0)
                 // 非当前版本：悬停时出现「恢复」提示
                 if !isCurrent {
-                    Label("恢复", systemImage: "arrow.uturn.backward")
+                    Label("恢复整个版本", systemImage: "arrow.uturn.backward")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .opacity(hovering ? 1 : 0)
@@ -568,9 +615,10 @@ private struct VersionChip: View {
             .contentShape(.rect(cornerRadius: 12))
         }
         .buttonStyle(.plain)
+        .disabled(!isCurrent && !session.canRestoreVersion)
         .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.15), value: hovering)
-        .help(isCurrent ? "画布当前显示的版本" : "恢复到这个版本（可撤销）")
+        .animation(reduceMotion ? nil : WorkspaceMotion.hover, value: hovering)
+        .help(isCurrent ? "画布当前显示的版本" : "恢复整个版本（可撤销）")
     }
 }
 
@@ -583,9 +631,33 @@ struct ChatComposer: View {
 
     var body: some View {
         let comments = session.draftComments
+        let boards = session.document.page(session.currentPageID)?.artboards ?? []
         VStack(alignment: .leading, spacing: 10) {
-            if let boards = session.document.page(session.currentPageID)?.artboards, !boards.isEmpty {
+            if !boards.isEmpty || session.draftScopeIssue != nil {
                 scopeMenu(boards)
+            }
+            if let issue = session.draftScopeIssue {
+                Label(issue, systemImage: "exclamationmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let notice = session.requestNotice, notice != session.draftScopeIssue {
+                HStack(alignment: .top) {
+                    Label(notice, systemImage: "info.circle").frame(maxWidth: .infinity, alignment: .leading)
+                    Button("关闭提示", systemImage: "xmark") { session.requestNotice = nil }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.plain)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            if session.isPreparingRequest {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("正在确认修改对象…")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             if !comments.isEmpty {
@@ -675,22 +747,25 @@ struct ChatComposer: View {
 
     private func scopeMenu(_ boards: [Artboard]) -> some View {
         let selected = session.draftScopeArtboards
-        let title = switch selected.count {
-        case 0: "整个画布"
-        case 1: "仅修改：\(selected[0].name)"
+        let issue = session.draftScopeIssue
+        let title = switch (issue != nil, selected.count) {
+        case (true, _): "重新选择修改范围"
+        case (_, 0): "整个画布"
+        case (_, 1): "仅修改：\(selected[0].name)"
         default: "仅修改 \(selected.count) 张画板"
         }
         return Menu {
             Button {
                 session.draftScopeIDs = []
+                session.requestNotice = nil
             } label: {
-                if selected.isEmpty {
+                if session.draftScopeIDs.isEmpty {
                     Label("整个画布", systemImage: "checkmark")
                 } else {
                     Text("整个画布")
                 }
             }
-            if session.canAskAboutSelection, session.selection?.elementID != nil {
+            if issue == nil, session.canAskAboutSelection, session.selection?.elementID != nil {
                 Button("修改选中的元素") {
                     session.askDraft = session.draft
                     session.showAskAI = true
@@ -699,20 +774,24 @@ struct ChatComposer: View {
             Divider()
             ForEach(boards) { board in
                 Toggle(board.name, isOn: Binding(
-                    get: { session.draftScopeIDs.contains(board.id) },
+                    get: { issue == nil && session.draftScopeIDs.contains(board.id) },
                     set: { included in
-                        if included { session.draftScopeIDs.insert(board.id) }
+                        if included {
+                            if issue != nil { session.draftScopeIDs = [board.id] }
+                            else { session.draftScopeIDs.insert(board.id) }
+                        }
                         else { session.draftScopeIDs.remove(board.id) }
+                        session.requestNotice = nil
                     }))
             }
         } label: {
-            ComposerChipLabel(idleTint: selected.isEmpty ? nil : Theme.accent) {
+            ComposerChipLabel(idleTint: session.draftScopeIDs.isEmpty ? nil : Theme.accent) {
                 Image(systemName: "scope").accessibilityHidden(true)
                 Text(title)
             }
         }
         .composerMenuStyle(fitsContent: false)
-        .help(selected.count > 1 ? selected.map(\.name).joined(separator: "、") : title)
+        .help(issue ?? (selected.count > 1 ? selected.map(\.name).joined(separator: "、") : title))
         .accessibilityLabel("修改范围")
         .accessibilityValue(title)
     }

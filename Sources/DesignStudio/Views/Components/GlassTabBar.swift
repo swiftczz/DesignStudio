@@ -4,13 +4,13 @@ import SwiftUI
 
 /// 玻璃质感的分段标签栏：选中块是一块可拖动的玻璃，按住在标签上左右滑动即可切换
 struct GlassTabBar<Item: Hashable & Identifiable>: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let items: [Item]
     let title: (Item) -> String
     @Binding var selection: Item
 
     /// 拖动中选中块的中心位置；nil 表示停靠在当前选中项
-    @State private var dragX: CGFloat?
-    @State private var pressing = false
+    @GestureState private var dragX: CGFloat?
 
     private let height: CGFloat = 30
     private let inset: CGFloat = 3
@@ -25,15 +25,12 @@ struct GlassTabBar<Item: Hashable & Identifiable>: View {
 
             GlassEffectContainer {
                 ZStack(alignment: .leading) {
-                    // 选中块：一块透明玻璃透镜，拖动时轻微放大；选中文字用主色标出
                     Capsule()
                         .fill(.clear)
                         .frame(width: segment, height: height)
                         .glassEffect(.regular.interactive(), in: .capsule)
-                        .scaleEffect(pressing ? 1.06 : 1)
                         .offset(x: indicatorX)
-                        // 点击切换时滑过去；拖动中直接跟手
-                        .animation(dragX == nil ? .spring(response: 0.32, dampingFraction: 0.78) : nil, value: selection)
+                        .animation(dragX == nil && !reduceMotion ? WorkspaceMotion.panel : nil, value: selection)
 
                     HStack(spacing: 0) {
                         ForEach(items) { item in
@@ -53,22 +50,13 @@ struct GlassTabBar<Item: Hashable & Identifiable>: View {
             .contentShape(.capsule)
             .gesture(
                 DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        if !pressing { withAnimation(.snappy(duration: 0.2)) { pressing = true } }
-                        // 轻点不拖动时不让选中块跳到指针下，松手再切换
-                        if abs(value.translation.width) > 2 || dragX != nil {
-                            dragX = value.location.x
-                            select(at: value.location.x, segment: segment, animated: false)
-                        }
+                    .updating($dragX) { value, position, transaction in
+                        guard abs(value.translation.width) > 3 || position != nil else { return }
+                        transaction.animation = nil
+                        position = value.location.x
                     }
                     .onEnded { value in
-                        // 内容区直接切换，不做淡入淡出（避免新旧内容叠在一起）；只有选中块带动画
-                        let wasDragging = dragX != nil
-                        select(at: value.location.x, segment: segment, animated: !wasDragging)
-                        withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
-                            dragX = nil
-                            pressing = false
-                        }
+                        select(at: value.location.x, segment: segment)
                     }
             )
         }
@@ -86,7 +74,7 @@ struct GlassTabBar<Item: Hashable & Identifiable>: View {
         }
     }
 
-    private func select(at x: CGFloat, segment: CGFloat, animated: Bool) {
+    private func select(at x: CGFloat, segment: CGFloat) {
         guard !items.isEmpty, segment > 0 else { return }
         let i = min(max(Int((x - inset) / segment), 0), items.count - 1)
         if items[i] != selection { selection = items[i] }

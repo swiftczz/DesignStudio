@@ -197,12 +197,13 @@ struct ArtboardWebView: NSViewRepresentable {
     let selectedElementIDs: [Int]
     let session: ProjectSession
     let onReady: () -> Void
+    var onLoadFailed: () -> Void = {}
 
     static let baseURL = URL(string: "https://canvas.designstudio.local/")!
 
     func makeCoordinator() -> Coordinator {
         Coordinator(handle: session.handle(for: artboard.id), session: session,
-                    selectedElementIDs: selectedElementIDs, onReady: onReady)
+                    selectedElementIDs: selectedElementIDs, onReady: onReady, onLoadFailed: onLoadFailed)
     }
 
     func makeNSView(context: Context) -> ArtboardViewport {
@@ -303,6 +304,7 @@ struct ArtboardWebView: NSViewRepresentable {
 
         let handle: ArtboardHandle
         let onReady: () -> Void
+        let onLoadFailed: () -> Void
         weak var session: ProjectSession?
         private var annotated = ""
         private var initialized = false
@@ -313,11 +315,13 @@ struct ArtboardWebView: NSViewRepresentable {
         var fit = ArtboardFit(on: false, viewportHeight: 900)
         var sharedCSS = ""
 
-        init(handle: ArtboardHandle, session: ProjectSession, selectedElementIDs: [Int], onReady: @escaping () -> Void) {
+        init(handle: ArtboardHandle, session: ProjectSession, selectedElementIDs: [Int],
+             onReady: @escaping () -> Void, onLoadFailed: @escaping () -> Void) {
             self.handle = handle
             self.session = session
             self.selectedElementIDs = selectedElementIDs
             self.onReady = onReady
+            self.onLoadFailed = onLoadFailed
         }
 
         func applyFit() {
@@ -416,6 +420,17 @@ struct ArtboardWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             if self.navigation === navigation { initialize() }
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
+            guard self.navigation === navigation else { return }
+            handle.isReady = false
+            handle.isInitialized = false
+            onLoadFailed()
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+            self.webView(webView, didFail: navigation, withError: error)
         }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
