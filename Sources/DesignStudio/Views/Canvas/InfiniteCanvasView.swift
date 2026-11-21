@@ -194,10 +194,11 @@ struct InfiniteCanvasView: View {
                 CanvasStatusBanner(session: session)
                     .padding(.top, 64)
             } else {
-                HStack(spacing: 12) {
+                HStack(spacing: 0) {
                     CanvasTopLeftBar(session: session)
+                    Spacer(minLength: 12)
                     CanvasStatusBanner(session: session)
-                        .frame(maxWidth: .infinity)
+                    Spacer(minLength: 12)
                     CanvasTopRightBar(session: session)
                 }
                 .padding(.horizontal, 14)
