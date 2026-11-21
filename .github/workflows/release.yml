@@ -78,39 +78,26 @@ jobs:
         run: ls -lh "dist/DesignStudio-${{ steps.ver.outputs.version }}.dmg"
 
       - name: Generate signed appcast
-        id: appcast
         if: steps.ver.outputs.is_tag == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
           SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
-          TAG_FORCE_PUSHED: ${{ github.event.forced }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          dmg="dist/DesignStudio-${VERSION}.dmg"
-          if [[ "$TAG_FORCE_PUSHED" == true || "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null)" == false ]]; then
-            # 已发布的更新源可能还在缓存里，保留旧下载地址，为新构建分配独立地址。
-            build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' build/DesignStudio.app/Contents/Info.plist)
-            rebuilt="dist/DesignStudio-${VERSION}-build${build}.dmg"
-            mv "$dmg" "$rebuilt"
-            dmg="$rebuilt"
-            printf '\n本次重新发布请下载 `%s`。\n' "$(basename "$dmg")" >> CHANGELOG.md
-          fi
-          bash Scripts/generate-appcast.sh "$dmg" CHANGELOG.md \
+          bash Scripts/generate-appcast.sh "dist/DesignStudio-${VERSION}.dmg" CHANGELOG.md \
             "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/"
-          echo "dmg=$dmg" >> "$GITHUB_OUTPUT"
 
       - name: Publish DMG and appcast
         if: steps.ver.outputs.is_tag == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          DMG: ${{ steps.appcast.outputs.dmg }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" --json tagName >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "$DMG" --clobber
-            gh release upload "$GITHUB_REF_NAME" dist/appcast.xml --clobber
+          assets=("dist/DesignStudio-${VERSION}.dmg" dist/appcast.xml)
+          if [[ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null)" == true ]]; then
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
             gh release edit "$GITHUB_REF_NAME" --draft=false --latest --notes-file CHANGELOG.md
           else
-            gh release create "$GITHUB_REF_NAME" "$DMG" dist/appcast.xml --verify-tag --latest \
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" --verify-tag --latest \
               --title "$GITHUB_REF_NAME" --notes-file CHANGELOG.md
           fi
 
