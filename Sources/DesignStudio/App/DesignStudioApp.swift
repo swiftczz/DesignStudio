@@ -41,7 +41,13 @@ struct DesignStudioApp: App {
                 .task { await app.auth.refreshAll(profiles: app.providers) }
                 .task { await app.refreshSavedChatGPTCatalog() }
         }
-        .defaultSize(width: 1480, height: 920)
+        .defaultWindowPlacement { _, context in
+            let visibleRect = context.defaultDisplay.visibleRect
+            return WindowPlacement(size: CGSize(
+                width: min(1480, (visibleRect.width * 0.82).rounded()),
+                height: min(920, (visibleRect.height * 0.86).rounded())
+            ))
+        }
         .windowToolbarStyle(.unified)
         .commands { AppCommands(app: app) }
 
