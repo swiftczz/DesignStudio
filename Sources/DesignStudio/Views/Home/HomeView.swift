@@ -113,10 +113,13 @@ struct HomeView: View {
 
     @ViewBuilder private var recentProjects: some View {
         if !app.projects.isEmpty {
+            let cardLimit = 4
+            let spacing: CGFloat = 14
+            let columns = Array(repeating: GridItem(.flexible(minimum: 0), spacing: spacing), count: cardLimit)
             VStack(alignment: .leading, spacing: 12) {
                 Text("最近的项目").font(.headline)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 18)], spacing: 18) {
-                    ForEach(app.sortedProjects.prefix(4)) { project in
+                LazyVGrid(columns: columns, alignment: .leading, spacing: spacing) {
+                    ForEach(app.sortedProjects.prefix(cardLimit)) { project in
                         ProjectCard(project: project)
                     }
                 }
@@ -168,7 +171,7 @@ struct ProjectCard: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 }
-                .padding(12)
+                .padding(10)
             }
             .background(.background, in: .rect(cornerRadius: 16))
             .clipShape(.rect(cornerRadius: 16))
