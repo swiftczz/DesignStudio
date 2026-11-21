@@ -251,7 +251,7 @@ private struct PencilStylePicker: View {
             .contentShape(.capsule)
         }
         .buttonStyle(.plain)
-        .help(title)
+        .modifier(HoverName(text: title))
         .accessibilityLabel(title)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }

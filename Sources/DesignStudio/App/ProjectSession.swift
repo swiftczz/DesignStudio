@@ -1140,7 +1140,7 @@ final class ProjectSession {
         guard canRearrangeArtboards, let pageID = document.page(currentPageID)?.id else { return }
         commit { doc in
             if let index = doc.pages.firstIndex(where: { $0.id == pageID }) {
-                doc.pages[index].rearrangeArtboards()
+                doc.pages[index].rearrangeArtboards(kind: kind)
             }
         }
         zoomToFit()

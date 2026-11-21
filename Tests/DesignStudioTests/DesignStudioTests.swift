@@ -225,7 +225,7 @@ struct ArtboardTests {
                      width: 1440, height: 900)
         }
         var page = DesignPage(name: "旧页面", artboards: original)
-        page.rearrangeArtboards()
+        page.rearrangeArtboards(kind: .prototype)
 
         #expect(page.artboards.map(\.x) == [-200, 1320, -200, 1320, -200, 1320, -200, 1320])
         #expect(page.artboards.map(\.y) == [50, 50, 1150, 1150, 2250, 2250, 3350, 3350])
@@ -253,6 +253,24 @@ struct ArtboardTests {
         doc.merge(mobile, into: nil, kind: .prototype)
         #expect(doc.allArtboards.map(\.x) == [0, 470, 940, 0, 470])
         #expect(doc.allArtboards.map(\.y) == [0, 0, 0, 1044, 1044])
+    }
+
+    @Test func tallDesktopPreviewsKeepTwoColumnsWhenTheFourthArtboardArrives() {
+        let outputs = (1...4).map {
+            ParsedArtboard(name: "网页 \($0)", width: 1440, autoHeight: true, html: "page", complete: true)
+        }
+        var doc = DesignDocument()
+        let firstIDs = doc.merge(Array(outputs.prefix(3)), into: nil, kind: .prototype)
+        for (id, height) in zip(firstIDs, [2460.0, 1780, 1690]) {
+            doc.resizeArtboard(id, height: height)
+        }
+
+        doc.merge(outputs, into: nil, kind: .prototype, previewArtboardIDs: Set(firstIDs))
+
+        #expect(doc.allArtboards.map(\.x) == [0, 1520, 0, 1520])
+        #expect(doc.allArtboards.map(\.y) == [0, 0, 2660, 2660])
+        #expect(doc.allArtboards.map(\.height) == [2460, 1780, 1690, 900])
+        #expect(Array(doc.allArtboards.prefix(3)).map(\.id) == firstIDs)
     }
 
     @Test func generatedRowsRespectMixedOrientationsAndExistingPositions() {

@@ -84,15 +84,20 @@ nonisolated struct DesignPage: Codable, Identifiable, Hashable, Sendable {
     }
 
     /// 自动排列从左到右、从上到下，换行时给下一排的标题留出空间。
-    fileprivate static func generatedOrigins(for artboards: [Artboard], from origin: CGPoint) -> [CGPoint] {
-        let fourPortraits = artboards.count == 4 && artboards.allSatisfy { $0.height > $0.width }
+    fileprivate static func generatedOrigins(for artboards: [Artboard], from origin: CGPoint,
+                                             kind: ProjectKind) -> [CGPoint] {
+        // 自动高度只影响行高。网页内容变长时，仍按原来视口的方向决定列数。
+        let portraits = artboards.map { board in
+            (board.fitsContent(in: kind) ? board.viewportHeight : board.height) > board.width
+        }
+        let fourPortraits = portraits.count == 4 && portraits.allSatisfy { $0 }
         var x = origin.x
         var y = origin.y
         var rowHeight: Double = 0
         var rowCount = 0
         var rowLimit = 3
-        return artboards.map { board in
-            let limit = board.height > board.width && !fourPortraits ? 3 : 2
+        return zip(artboards, portraits).map { board, isPortrait in
+            let limit = isPortrait && !fourPortraits ? 3 : 2
             if rowCount >= min(rowLimit, limit) {
                 x = origin.x
                 y += rowHeight + artboardRowGap
@@ -114,13 +119,14 @@ nonisolated struct DesignPage: Codable, Identifiable, Hashable, Sendable {
         return CGPoint(x: bounds.minX, y: bounds.maxY + Self.artboardRowGap)
     }
 
-    fileprivate static func matchesGeneratedLayout(_ artboards: [Artboard], from origin: CGPoint) -> Bool {
-        zip(artboards, generatedOrigins(for: artboards, from: origin)).allSatisfy { $0.frame.origin == $1 }
+    fileprivate static func matchesGeneratedLayout(_ artboards: [Artboard], from origin: CGPoint,
+                                                   kind: ProjectKind) -> Bool {
+        zip(artboards, generatedOrigins(for: artboards, from: origin, kind: kind)).allSatisfy { $0.frame.origin == $1 }
     }
 
-    mutating func rearrangeArtboards() {
+    mutating func rearrangeArtboards(kind: ProjectKind) {
         guard let bounds, artboards.count > 1 else { return }
-        arrangeArtboards(at: Array(artboards.indices), from: bounds.origin)
+        arrangeArtboards(at: Array(artboards.indices), from: bounds.origin, kind: kind)
     }
 }
 
@@ -270,7 +276,7 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
             }
         }
         if page.artboards.count > previous.artboards.count {
-            page.arrangeGeneratedArtboards(previous: previous, previewArtboardIDs: previewArtboardIDs)
+            page.arrangeGeneratedArtboards(previous: previous, previewArtboardIDs: previewArtboardIDs, kind: kind)
         }
         pages[pageIndex] = page
         return changed
@@ -282,25 +288,25 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
 }
 
 private extension DesignPage {
-    nonisolated mutating func arrangeGeneratedArtboards(previous: DesignPage, previewArtboardIDs: Set<UUID>) {
+    nonisolated mutating func arrangeGeneratedArtboards(previous: DesignPage, previewArtboardIDs: Set<UUID>, kind: ProjectKind) {
         var fixedIDs = Set<UUID>()
-        if !Self.matchesGeneratedLayout(previous.artboards, from: .zero) {
+        if !Self.matchesGeneratedLayout(previous.artboards, from: .zero, kind: kind) {
             let fixed = previous.artboards.filter { !previewArtboardIDs.contains($0.id) }
             let previews = previous.artboards.filter { previewArtboardIDs.contains($0.id) }
             let fixedPage = DesignPage(name: name, artboards: fixed)
             // 预览画板也能手动拖动。只有位置仍符合自动排列时才重新排它们。
-            let preserved = Self.matchesGeneratedLayout(previews, from: fixedPage.generatedRowBelow)
+            let preserved = Self.matchesGeneratedLayout(previews, from: fixedPage.generatedRowBelow, kind: kind)
                 ? fixed : previous.artboards
             fixedIDs = Set(preserved.map(\.id))
         }
 
         let positions = artboards.indices.filter { !fixedIDs.contains(artboards[$0].id) }
         let fixedPage = DesignPage(name: name, artboards: artboards.filter { fixedIDs.contains($0.id) })
-        arrangeArtboards(at: positions, from: fixedPage.generatedRowBelow)
+        arrangeArtboards(at: positions, from: fixedPage.generatedRowBelow, kind: kind)
     }
 
-    nonisolated mutating func arrangeArtboards(at positions: [Int], from origin: CGPoint) {
-        let origins = Self.generatedOrigins(for: positions.map { artboards[$0] }, from: origin)
+    nonisolated mutating func arrangeArtboards(at positions: [Int], from origin: CGPoint, kind: ProjectKind) {
+        let origins = Self.generatedOrigins(for: positions.map { artboards[$0] }, from: origin, kind: kind)
         for (index, origin) in zip(positions, origins) {
             artboards[index].x = origin.x
             artboards[index].y = origin.y

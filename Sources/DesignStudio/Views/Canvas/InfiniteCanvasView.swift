@@ -188,21 +188,21 @@ struct InfiniteCanvasView: View {
             }
             .padding(.bottom, Self.edgeInset)
         }
-        // 非全屏：顶部两组工具栏放在标题栏下方（标题栏里的点击会被系统工具栏拦截，用于拖动窗口）
+        // 非全屏：工具栏和提示共用一行，放在可点击的标题栏下方。
         .overlay(alignment: .top) {
-            if !session.isFullScreen {
-                HStack(alignment: .top) {
+            if session.isFullScreen {
+                CanvasStatusBanner(session: session)
+                    .padding(.top, 64)
+            } else {
+                HStack(spacing: 12) {
                     CanvasTopLeftBar(session: session)
-                    Spacer(minLength: 12)
+                    CanvasStatusBanner(session: session)
+                        .frame(maxWidth: .infinity)
                     CanvasTopRightBar(session: session)
                 }
                 .padding(.horizontal, 14)
                 .padding(.top, 14)
             }
-        }
-        .overlay(alignment: .top) {
-            CanvasStatusBanner(session: session)
-                .padding(.top, 64)   // 位于顶部控制条下方
         }
         .overlay {
             if session.currentPage?.artboards.isEmpty ?? true, !session.isGenerating {
@@ -1186,12 +1186,19 @@ private struct CanvasStatusBanner: View {
 
     var body: some View {
         if session.isGenerating {
+            let status = session.status ?? "生成中…"
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text(session.status ?? "生成中…")
+                ViewThatFits(in: .horizontal) {
+                    Text(status).fixedSize()
+                    Text("生成中").lineLimit(1)
+                }
+                .accessibilityLabel(status)
+                .help(status)
                 Button("停止") { session.stop() }
                     .buttonStyle(.borderless)
                     .foregroundStyle(Theme.accent)
+                    .fixedSize()
             }
             .font(.callout)
             .padding(.horizontal, 14)
@@ -1207,6 +1214,7 @@ private struct CanvasStatusBanner: View {
                 Button("让 AI 修复") { session.fixError(in: id) }
                     .buttonStyle(.borderless)
                     .foregroundStyle(Theme.accent)
+                    .fixedSize()
                 Button {
                     session.artboardErrors[id] = nil
                 } label: {
