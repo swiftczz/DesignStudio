@@ -9,7 +9,7 @@ enum ProviderBrand: String, CaseIterable {
     static func detect(_ profile: ProviderProfile) -> ProviderBrand? {
         switch profile.kind {
         case .claudeCode: return .claude
-        case .codex: return .openai
+        case .codex, .chatGPT: return .openai
         case .antigravity: return .antigravity
         default: break
         }

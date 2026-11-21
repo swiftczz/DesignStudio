@@ -9,7 +9,8 @@
 | 来源 | 登录 / 鉴权方式 | 说明 |
 | --- | --- | --- |
 | **Claude 账号** | 官方 Claude Code CLI：`claude auth login` | 支持 Pro / Max 订阅或 Console 账号，额度走你自己的账号 |
-| **Codex / ChatGPT 账号** | 官方 Codex CLI：`codex login` | 用 ChatGPT 账号登录，在只读沙箱中流式生成 |
+| **ChatGPT** | 浏览器授权 DesignStudio | 直连 OpenAI Responses API，使用符合条件的 ChatGPT 订阅额度 |
+| **Codex CLI** | 官方 Codex CLI：`codex login` | 沿用本机 CLI 的账号、模型来源和额外参数 |
 | **Antigravity / Google 账号** | Google Antigravity CLI：首次运行 `agy` 时登录 | 使用 Google AI 订阅额度，`agy -p` 非交互调用 |
 | **第三方 API** | API Key（本地 `secrets.json`） | 接口类型可切换：OpenAI Chat Completions / OpenAI Responses / Anthropic Messages；支持 OpenAI、OpenRouter、DeepSeek、Kimi、通义百炼、硅基流动、智谱、Ollama 本地等 |
 
@@ -83,16 +84,20 @@ swift test
 
 应用通过 `claude -p --output-format stream-json --include-partial-messages --system-prompt …` 调用，**令牌由官方 CLI 管理，本应用不读取、不保存**。
 
-### Codex 账号
+### ChatGPT 直连
+
+在「设置 → 模型与账号」选择 **ChatGPT**，点击「使用 ChatGPT 登录」，在浏览器中授权订阅用量。DesignStudio 会拉取该账号可选的模型，生成时直接请求 OpenAI Responses API。可以在「管理用量」或 ChatGPT 设置中管理这项授权。
+
+### Codex CLI
 
 1. 安装：`npm install -g @openai/codex`（或 `brew install --cask codex`）
-2. 点「使用 ChatGPT 登录」（后台运行 `codex login`）
+2. 选择 **Codex CLI**，点击「通过 Codex CLI 登录」（后台运行 `codex login`），也可以沿用已登录的本机 CLI 配置
 3. 生成时通过 `codex app-server` 接收正文增量。旧版 CLI 或配置了自定义 CLI 参数时使用 `codex exec --json`。两个入口都以 Standard 速度运行。
 
 ### Antigravity 账号
 
 1. 安装：`brew install --cask antigravity-cli`
-2. 点「在终端中用 Google 登录」，在终端里运行 `agy` 并按提示登录（退出登录在 `agy` 里输入 `/logout`）
+2. 点「使用 Google 登录」，在终端里按 `agy` 的提示授权。已登录时，「重新登录」和「退出登录」会引导你在 `agy` 中输入 `/logout`。
 3. 生成时调用 `agy --input-format stream-json --output-format stream-json -p=`，提示词以 NDJSON 从 stdin 传入
 
 ### 思考强度
@@ -161,11 +166,11 @@ Sources/DesignStudio
 
 发布时，工作流使用仓库的 `SPARKLE_PRIVATE_ED_KEY` Actions secret 为 DMG 和 `appcast.xml` 签名，上传两者后再公开 Release。签名私钥必须与 `Support/Info.plist` 中的 `SUPublicEDKey` 配对。本机的签名密钥保存在钥匙串的 `app.designstudio.mac` Sparkle 账户中。
 
-发布时创建并推送 `v` 开头的版本标签。工作流用标签确定显示版本，并用该提交的 Git 历史总提交数作为构建号。`Support/Info.plist` 中的版本字段是本地打包的默认值。手动运行发布工作流时填写版本号，生成的 DMG 会作为工作流产物上传。
+发布时创建并推送 `v` 开头的版本标签。工作流用标签确定显示版本，并用该提交的 Git 历史总提交数作为构建号。本地打包默认使用最近可达的发布标签，找不到标签时使用 `Support/Info.plist` 中的版本。手动运行发布工作流时填写版本号，生成的 DMG 会作为工作流产物上传。
 
 本地有 Developer ID Application 证书时，`release-dmg.sh` 会自动用它签名；设置 `NOTARY_PROFILE`（`xcrun notarytool store-credentials` 保存的凭据名）后还会提交公证。
 
 ## 说明
 
-- 使用订阅账号时请遵守 Anthropic / OpenAI / Google 的使用条款：本应用只是在你本机调用你自己安装并登录的官方 CLI，不代理、不转发、不共享凭据。
+- ChatGPT 直连使用你授予 DesignStudio 的订阅权限，令牌保存在本机。各 CLI 来源的登录凭据由你本机安装的对应 CLI 管理。订阅使用受各服务商的条款约束。
 - 生成的设计会加载 Google Fonts、Tailwind CDN 等外部资源，离线时样式可能不完整。

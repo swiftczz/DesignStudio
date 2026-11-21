@@ -39,6 +39,7 @@ struct DesignStudioApp: App {
                     app.softwareUpdater.start(legacyAutomaticChecks: app.settings.automaticallyChecksForUpdates)
                 }
                 .task { await app.auth.refreshAll(profiles: app.providers) }
+                .task { await app.refreshSavedChatGPTCatalog() }
         }
         .defaultSize(width: 1480, height: 920)
         .windowToolbarStyle(.unified)

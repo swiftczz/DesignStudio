@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Observation
 @testable import DesignStudio
 
 @Suite("HTML 提取")
@@ -536,6 +537,34 @@ struct ScrollFollowLayoutTests {
 @Suite("Antigravity")
 @MainActor
 struct AntigravityTests {
+    @Test func refreshUsesCLIModelsToDetectAnAuthenticatedSession() async throws {
+        let dir = try TempWorkspace.make(prefix: "fake-agy-auth")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cli = dir.appending(path: "agy")
+        try #"""
+        #!/bin/sh
+        [ "$1" = models ] || exit 127
+        printf 'gemini-test\tGemini Test\n'
+        """#.write(to: cli, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cli.path)
+        var cachedIDs: [String] = []
+        let auth = CLIAuthService { cachedIDs = $0.map(\.id) }
+
+        await auth.refresh(.antigravity, executable: cli.path)
+
+        #expect(auth.state(.antigravity) == .loggedIn("Google 账号"))
+        #expect(cachedIDs == ["gemini-test"])
+    }
+
+    @Test func distinguishesSignInFromTransportFailure() {
+        if case .notLoggedIn = AntigravityProvider.classify("Authentication required") {} else {
+            Issue.record("Expected authentication required to report a signed-out session")
+        }
+        if case .cli = AntigravityProvider.classify("Failed to connect to authentication server: connection timed out") {} else {
+            Issue.record("Expected an authentication server timeout to remain a connection error")
+        }
+    }
+
     @Test func parsesModelList() {
         let out = "Fetching available models...\ngemini-4-carbon-medium\tGemini 4 Carbon (Medium)\nclaude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)\n"
         let models = ModelCatalog.parseAntigravityModels(out)
@@ -654,6 +683,34 @@ struct CLIDiagnosisTests {
     @Test func normalLoggedOutIsNotBroken() {
         #expect(CLIDiagnosis.reinstallCommand(for: "Not logged in", kind: .codex) == nil)
         #expect(CLIDiagnosis.reinstallCommand(for: "zsh: command not found: codex", kind: .codex) == nil)
+    }
+
+    @MainActor @Test(.timeLimit(.minutes(1)), arguments: [0, 1])
+    func offersTerminalOnlyAfterUnfinishedBrowserLogin(exitCode: Int) async throws {
+        let dir = try TempWorkspace.make(prefix: "fake-claude-login")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cli = dir.appending(path: "claude")
+        try #"""
+        #!/bin/sh
+        case "$*" in
+            'auth login --console') exit \#(exitCode) ;;
+            'auth status') printf '{}\n' ;;
+            *) exit 127 ;;
+        esac
+        """#.write(to: cli, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cli.path)
+        let auth = CLIAuthService()
+        #expect(!auth.canContinueLoginInTerminal(.claudeCode))
+
+        auth.login(.claudeCode, executable: cli.path, console: true)
+        #expect(!auth.canContinueLoginInTerminal(.claudeCode))
+        let busy = Observations { auth.loginInProgress.contains(.claudeCode) }
+        for await inProgress in busy {
+            if !inProgress { break }
+        }
+
+        #expect(auth.state(.claudeCode).isLoggedIn)
+        #expect(auth.canContinueLoginInTerminal(.claudeCode) == (exitCode != 0))
     }
 }
 

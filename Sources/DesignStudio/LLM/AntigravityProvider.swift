@@ -118,8 +118,9 @@ nonisolated struct AntigravityProvider: LLMProvider {
     static func classify(_ message: String) -> LLMError {
         if let hint = CLIDiagnosis.brokenInstallMessage(message, kind: .antigravity, name: "Antigravity") { return .cli(hint) }
         let lower = message.lowercased()
-        if lower.contains("not authenticated") || lower.contains("sign in") || lower.contains("login")
-            || lower.contains("unauthenticated") {
+        let signInRequired = ["not authenticated", "not logged in", "not signed in", "sign in",
+                              "login required", "please login", "please log in", "authentication required", "unauthenticated"]
+        if signInRequired.contains(where: lower.contains) {
             return .notLoggedIn("Antigravity")
         }
         if lower.contains("command not found") { return .notInstalled("agy") }

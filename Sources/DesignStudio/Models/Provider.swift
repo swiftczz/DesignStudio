@@ -5,6 +5,8 @@ nonisolated enum ProviderKind: String, Codable, CaseIterable, Identifiable, Send
     case claudeCode
     /// 通过官方 Codex CLI（codex login，支持 ChatGPT 账号登录）
     case codex
+    /// 使用 DesignStudio 自己的 ChatGPT 授权直连 Responses API
+    case chatGPT
     /// 通过 Google Antigravity CLI（agy，使用 Google 账号与 Google AI 订阅额度）
     case antigravity
     /// Anthropic Messages API 及兼容接口（智谱、Kimi、DeepSeek 等提供的 /anthropic 端点）
@@ -22,7 +24,8 @@ nonisolated enum ProviderKind: String, Codable, CaseIterable, Identifiable, Send
     var title: String {
         switch self {
         case .claudeCode: "Claude 账号登录"
-        case .codex: "Codex / ChatGPT 登录"
+        case .codex: "Codex CLI"
+        case .chatGPT: "ChatGPT 登录（直连）"
         case .antigravity: "Antigravity / Google 登录"
         case .anthropicAPI: "Anthropic Messages"
         case .openAICompatible: "OpenAI Chat Completions"
@@ -34,6 +37,7 @@ nonisolated enum ProviderKind: String, Codable, CaseIterable, Identifiable, Send
         switch self {
         case .claudeCode: "sparkle"
         case .codex: "chevron.left.forwardslash.chevron.right"
+        case .chatGPT: "person.badge.key"
         case .antigravity: "airplane"
         case .anthropicAPI: "key.horizontal"
         case .openAICompatible, .openAIResponses: "network"
@@ -199,7 +203,8 @@ nonisolated struct ProviderProfile: Codable, Identifiable, Hashable, Sendable {
     /// 应用单个项目选择的模型和思考强度；`nil` / 空字符串表示沿用设置里的配置
     func resolved(model override: String?, effort: String? = nil) -> ProviderProfile {
         var copy = self
-        if let override = override?.trimmed, !override.isEmpty { copy.model = override }
+        if let override = override?.trimmed, !override.isEmpty,
+           kind != .chatGPT || models.contains(override) { copy.model = override }
         copy.effort = effort?.trimmed ?? ""
         return copy
     }
@@ -223,7 +228,11 @@ nonisolated struct ProviderProfile: Codable, Identifiable, Hashable, Sendable {
     }
 
     static func codex() -> ProviderProfile {
-        ProviderProfile(name: "Codex", kind: .codex)
+        ProviderProfile(name: "Codex CLI", kind: .codex)
+    }
+
+    static func chatGPT() -> ProviderProfile {
+        ProviderProfile(name: "ChatGPT", kind: .chatGPT)
     }
 
     static func antigravity() -> ProviderProfile {
@@ -315,4 +324,6 @@ nonisolated struct AppSettings: Codable, Sendable {
     var accentTheme: String?
     /// 旧版本的自动检查偏好，首次启动 Sparkle 时迁移。
     var automaticallyChecksForUpdates: Bool?
+    /// 旧安装首次升级时提供独立的 ChatGPT 登录入口。
+    var didAddChatGPTProvider: Bool?
 }

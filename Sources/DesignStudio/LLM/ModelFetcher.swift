@@ -8,6 +8,8 @@ nonisolated enum ModelFetcher {
             return try await fetchAnthropic(profile, apiKey: apiKey)
         case .openAICompatible, .openAIResponses:
             return try await fetchOpenAI(profile, apiKey: apiKey)
+        case .chatGPT:
+            return try await ChatGPTAuthService.shared.models()
         case .claudeCode, .codex, .antigravity:
             return []
         }

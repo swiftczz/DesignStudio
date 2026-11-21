@@ -15,6 +15,7 @@ final class AppModel {
     let persistence: PersistenceController
     let makeProvider: @MainActor (ProviderProfile) throws -> any LLMProvider
     let auth = CLIAuthService()
+    let chatGPTAuth = ChatGPTAuthService.shared
     let softwareUpdater = SoftwareUpdater()
 
     var projects: [Project] = []
@@ -46,12 +47,24 @@ final class AppModel {
         markInterruptedReplies()
         designSystems = persistence.load([DesignSystem].self, file: "design-systems.json") ?? DesignSystem.builtIns
         providers = persistence.load([ProviderProfile].self, file: "providers.json")
-            ?? [.claudeCode(), .codex(), .anthropic()]
+            ?? [.claudeCode(), .chatGPT(), .codex(), .anthropic()]
         settings = persistence.load(AppSettings.self, file: "settings.json") ?? AppSettings()
-        ThemeStore.shared.choice = settings.accentTheme.flatMap(ThemeColor.init(rawValue:)) ?? .terracotta
         if settings.defaultProviderID == nil || provider(for: settings.defaultProviderID) == nil {
             settings.defaultProviderID = providers.first?.id
         }
+        if settings.didAddChatGPTProvider != true {
+            if let index = providers.firstIndex(where: { $0.kind == .codex }) {
+                if providers[index].name == "Codex" { providers[index].name = "Codex CLI" }
+                if !providers.contains(where: { $0.kind == .chatGPT }) {
+                    providers.insert(.chatGPT(), at: index)
+                }
+            }
+            // 保留旧 CLI 来源的 ID，项目、默认模型和 CLI 参数继续沿用原来的配置。
+            settings.didAddChatGPTProvider = true
+            saveProviders()
+            saveSettings()
+        }
+        ThemeStore.shared.choice = settings.accentTheme.flatMap(ThemeColor.init(rawValue:)) ?? .terracotta
         let fm = FileManager.default
         for p in projects where fm.fileExists(atPath: persistence.thumbnailURL(p.id).path) {
             thumbnailStamps[p.id] = p.updatedAt
@@ -333,6 +346,34 @@ final class AppModel {
                 self.saveProviders()
             }
         )
+    }
+
+    func refreshSavedChatGPTCatalog() async {
+        guard chatGPTAuth.canUsePlan,
+              let profile = providers.first(where: { $0.kind == .chatGPT }),
+              profile.availableModels.isEmpty || profile.availableModels.contains(where: { $0.efforts == nil }) else { return }
+        // 旧版目录未保存思考强度。应用打开后在后台拉取，沿用已有账号。
+        try? await refreshChatGPTModels(for: profile.id)
+    }
+
+    func refreshChatGPTModels(for id: UUID) async throws {
+        guard let profile = provider(for: id), profile.kind == .chatGPT else { return }
+        let models = try await ModelFetcher.fetch(profile, apiKey: "")
+        try Task.checkCancellation()
+        guard chatGPTAuth.canUsePlan else { throw CancellationError() }
+        updateChatGPTModels(models, for: id)
+        guard !models.isEmpty else { throw LLMError.invalidResponse("该账号没有返回可用的 ChatGPT 模型。") }
+    }
+
+    func updateChatGPTModels(_ models: [RemoteModel], for id: UUID) {
+        guard let index = providers.firstIndex(where: { $0.id == id && $0.kind == .chatGPT }) else { return }
+        var profile = providers[index]
+        profile.availableModels = models
+        profile.models = models.map(\.id)
+        if !profile.models.contains(profile.model) { profile.model = profile.models.first ?? "" }
+        guard profile != providers[index] else { return }
+        providers[index] = profile
+        saveProviders()
     }
 
     func saveProviders() { persistence.store(providers, file: "providers.json") }

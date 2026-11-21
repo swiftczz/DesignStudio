@@ -190,6 +190,8 @@ enum ProviderFactory {
             return ClaudeCodeProvider(profile: profile)
         case .codex:
             return CodexProvider(profile: profile)
+        case .chatGPT:
+            return OpenAIResponsesProvider(profile: profile, apiKey: "")
         case .antigravity:
             return AntigravityProvider(profile: profile)
         case .anthropicAPI:

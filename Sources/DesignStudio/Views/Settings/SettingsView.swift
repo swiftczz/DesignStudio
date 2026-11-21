@@ -35,7 +35,7 @@ struct ProvidersSettingsView: View {
                                         Text("默认").font(.caption2).foregroundStyle(Theme.accent)
                                     }
                                 }
-                                Text(p.kind.isCLI ? app.auth.state(p.kind).label : p.displayModel)
+                                Text(providerStatus(p))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
@@ -53,8 +53,12 @@ struct ProvidersSettingsView: View {
                             Button { add(.claudeCode()) } label: {
                                 brandLabel("Claude（Pro / Max / Console 账号）", .claude)
                             }
+                            Button { add(.chatGPT()) } label: {
+                                brandLabel("ChatGPT（直连）", .openai)
+                            }
+                            .disabled(app.providers.contains { $0.kind == .chatGPT })
                             Button { add(.codex()) } label: {
-                                brandLabel("Codex（ChatGPT 账号）", .openai)
+                                brandLabel("Codex CLI", .openai)
                             }
                             Button { add(.antigravity()) } label: {
                                 brandLabel("Antigravity（Google 账号）", .antigravity)
@@ -77,13 +81,19 @@ struct ProvidersSettingsView: View {
 
                     Button {
                         guard let id = selection else { return }
-                        app.deleteProvider(id)
-                        selection = app.providers.first?.id
+                        if app.provider(for: id)?.kind == .chatGPT {
+                            Task {
+                                await app.chatGPTAuth.signOut()
+                                if !app.chatGPTAuth.isSignedIn { remove(id) }
+                            }
+                        } else {
+                            remove(id)
+                        }
                     } label: {
                         Image(systemName: "minus")
                     }
                     .buttonStyle(.borderless)
-                    .disabled(selection == nil)
+                    .disabled(selection == nil || (app.provider(for: selection)?.kind == .chatGPT && app.chatGPTAuth.busy))
                     Spacer()
                 }
                 .padding(8)
@@ -119,6 +129,17 @@ struct ProvidersSettingsView: View {
         app.addProvider(profile)
         selection = profile.id
     }
+
+    private func remove(_ id: UUID) {
+        app.deleteProvider(id)
+        if selection == id { selection = app.providers.first?.id }
+    }
+
+    private func providerStatus(_ profile: ProviderProfile) -> String {
+        if profile.kind == .chatGPT { return app.chatGPTAuth.status }
+        if profile.kind.isCLI { return app.auth.state(profile.kind).label }
+        return profile.displayModel
+    }
 }
 
 struct ProviderDetailView: View {
@@ -140,7 +161,7 @@ struct ProviderDetailView: View {
         Form {
             Section("基本") {
                 TextField("显示名称", text: binding.name)
-                if profile.kind.isCLI {
+                if profile.kind.isCLI || profile.kind == .chatGPT {
                     LabeledContent("类型", value: profile.kind.title)
                 } else {
                     Picker("接口类型", selection: Binding(
@@ -171,6 +192,9 @@ struct ProviderDetailView: View {
             case .claudeCode, .codex, .antigravity:
                 AccountSection(profile: profile)
                 cliSection(binding)
+            case .chatGPT:
+                chatGPTAccountSection
+                chatGPTModelsSection(binding)
             case .anthropicAPI, .openAICompatible, .openAIResponses:
                 apiSection(binding)
                 modelsSection(binding)
@@ -187,7 +211,8 @@ struct ProviderDetailView: View {
                     } label: {
                         Label("测试连接", systemImage: "bolt.horizontal")
                     }
-                    .disabled(testing)
+                    .disabled(testing || (profile.kind == .chatGPT
+                        && (!app.chatGPTAuth.canUsePlan || profile.model.isEmpty || app.chatGPTAuth.busy)))
                     if testing { ProgressView().controlSize(.small) }
                     Spacer()
                 }
@@ -208,10 +233,101 @@ struct ProviderDetailView: View {
         }
         .formStyle(.grouped)
         .onAppear {
-            if !profile.kind.isCLI { apiKey = SecretStore.get(profile.secretAccount) ?? "" }
+            if ProviderKind.apiKinds.contains(profile.kind) { apiKey = SecretStore.get(profile.secretAccount) ?? "" }
         }
         .sheet(isPresented: $showModelPicker) {
             ModelPickerSheet(profile: binding)
+        }
+    }
+
+    private var chatGPTAccountSection: some View {
+        let auth = app.chatGPTAuth
+        return Section {
+            LabeledContent("状态", value: auth.status)
+            HStack(spacing: 8) {
+                if auth.signingIn {
+                    ProgressView().controlSize(.small)
+                    Text("等待浏览器授权…").foregroundStyle(.secondary)
+                    Button("取消登录") { auth.cancelSignIn() }
+                } else {
+                    let label = auth.isSignedIn ? (auth.canUsePlan ? "重新登录" : "授权订阅用量") : "使用 ChatGPT 登录"
+                    Button(label) { Task { await signInToChatGPT() } }
+                        .disabled(auth.busy)
+                    if auth.isSignedIn {
+                        Button("退出登录", role: .destructive) {
+                            Task {
+                                await auth.signOut()
+                                if !auth.isSignedIn {
+                                    app.updateChatGPTModels([], for: profileID)
+                                    testResult = nil
+                                    fetchError = nil
+                                }
+                            }
+                        }
+                        .disabled(auth.busy)
+                    } else if auth.hasRegistration {
+                        Button("使用其他账号") { Task { await signInToChatGPT(newAccount: true) } }
+                            .disabled(auth.busy)
+                    }
+                }
+                Spacer()
+                if auth.isSignedIn {
+                    Link("管理用量", destination: URL(string: "https://chatgpt.com/settings/usage")!)
+                }
+            }
+            if let error = auth.error {
+                Text(error).foregroundStyle(.secondary).textSelection(.enabled)
+            }
+        } header: {
+            Text("账号")
+        } footer: {
+            Text("在浏览器中授权 DesignStudio 使用符合条件的 ChatGPT 订阅额度。生成通过 OpenAI 官方接口直连，无需安装 Codex CLI。")
+        }
+    }
+
+    private func chatGPTModelsSection(_ binding: Binding<ProviderProfile>) -> some View {
+        let profile = binding.wrappedValue
+        return Section("模型") {
+            if !profile.availableModels.isEmpty, app.chatGPTAuth.canUsePlan {
+                Picker("默认模型", selection: binding.model) {
+                    ForEach(profile.availableModels) { model in
+                        Text(model.title).tag(model.id)
+                    }
+                }
+            }
+            HStack(spacing: 8) {
+                Button("拉取模型列表", systemImage: "arrow.down.circle") {
+                    Task { await fetchChatGPTModels() }
+                }
+                .disabled(fetching || !app.chatGPTAuth.canUsePlan || app.chatGPTAuth.busy)
+                if fetching { ProgressView().controlSize(.small) }
+            }
+            if let fetchError {
+                Text(fetchError).foregroundStyle(.red).textSelection(.enabled)
+            }
+        }
+    }
+
+    private func signInToChatGPT(newAccount: Bool = false) async {
+        let auth = app.chatGPTAuth
+        let wasSignedIn = auth.isSignedIn
+        guard await auth.signIn(newAccount: newAccount) else { return }
+        testResult = nil
+        if !wasSignedIn || !auth.canUsePlan { app.updateChatGPTModels([], for: profileID) }
+        if auth.canUsePlan { await fetchChatGPTModels() }
+    }
+
+    private func fetchChatGPTModels() async {
+        fetching = true
+        fetchError = nil
+        defer { fetching = false }
+        do {
+            try await app.refreshChatGPTModels(for: profileID)
+        } catch is CancellationError {
+            // 切换账号后丢弃旧账号的模型列表。
+        } catch {
+            if !app.chatGPTAuth.canUsePlan { app.updateChatGPTModels([], for: profileID) }
+            fetchError = error.localizedDescription
         }
     }
 
@@ -257,7 +373,7 @@ struct ProviderDetailView: View {
             case .antigravity:
                 Text("通过 Google Antigravity CLI 以非交互模式（agy -p）调用，使用你的 Google 账号与 Google AI 订阅额度。模型列表在检测登录状态时从 agy 更新。")
             default:
-                Text("通过官方 Codex CLI（codex exec，只读沙箱）调用，使用你的 ChatGPT 账号额度。")
+                Text("调用本机 Codex CLI，沿用 CLI 的登录和模型提供商配置。")
             }
         }
     }
@@ -521,13 +637,16 @@ enum TokenFormat {
 
 struct AccountSection: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.openURL) private var openURL
     let profile: ProviderProfile
+    @State private var checksOnReturn = false
 
     var body: some View {
         let auth = app.auth
         let kind = profile.kind
         let state = auth.state(kind)
         let exe = profile.cliExecutable
+        let loginInProgress = auth.loginInProgress.contains(kind)
 
         Section {
             LabeledContent("状态") {
@@ -539,11 +658,12 @@ struct AccountSection: View {
                         Image(systemName: "arrow.clockwise")
                     }
                     .buttonStyle(.borderless)
+                    .disabled(state == .checking || loginInProgress)
                     .help("重新检测")
                 }
             }
 
-            if auth.loginInProgress.contains(kind) {
+            if loginInProgress {
                 HStack(spacing: 10) {
                     ProgressView().controlSize(.small)
                     Text("请在浏览器中完成登录…")
@@ -551,36 +671,34 @@ struct AccountSection: View {
                     Button("取消") { auth.cancelLogin(kind) }
                 }
             } else if case .broken(let fix) = state {
-                // 装上了但跑不起来：登录按钮没用，直接给修复命令
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("`\(exe)` 已安装但无法运行（安装不完整，常见于缺少当前芯片对应的组件）。重新安装后点刷新：")
+                    Text("`\(exe)` 安装不完整。重新安装后回到这里检测。")
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(fix)
-                        .font(.callout.monospaced())
-                        .textSelection(.enabled)
-                        .padding(8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.quaternary, in: .rect(cornerRadius: 6))
-                    HStack(spacing: 10) {
-                        Button("在终端中重新安装") { auth.openTerminalRepair(kind, command: fix) }
-                        if fix.hasPrefix("npm ") {
-                            Text("提示权限不足时，在命令前加 sudo")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                    Button("在终端中重新安装") {
+                        checksOnReturn = true
+                        auth.openTerminalRepair(kind, command: fix)
                     }
                 }
             } else if state == .notInstalled {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("没有找到 `\(exe)`。在终端中安装后点击刷新：")
-                    Text(CLIAuthService.installHint(for: kind))
-                        .font(.callout.monospaced())
-                        .textSelection(.enabled)
-                        .padding(8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.quaternary, in: .rect(cornerRadius: 6))
+                    Text("使用账号登录前，请先安装 `\(exe)`。")
+                    if let guide = CLIAuthService.installationGuide(for: kind) {
+                        Button("安装 CLI", systemImage: "arrow.up.right") {
+                            checksOnReturn = true
+                            openURL(guide)
+                        }
+                        .help("打开官方安装指南")
+                    }
+                    DisclosureGroup("终端安装命令") {
+                        Text(CLIAuthService.installHint(for: kind))
+                            .font(.callout.monospaced())
+                            .textSelection(.enabled)
+                    }
+                    Text("安装完成后回到这里，也可以点刷新重新检测。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-            } else {
+            } else if state != .checking && state != .unknown {
                 HStack(spacing: 8) {
                     if kind == .claudeCode {
                         Menu(state.isLoggedIn ? "重新登录" : "登录 Claude") {
@@ -591,47 +709,61 @@ struct AccountSection: View {
                         }
                         .fixedSize()
                     } else if kind == .antigravity {
-                        // agy 只能在终端里交互式登录
-                        Button(state.isLoggedIn ? "在终端中重新登录" : "在终端中用 Google 登录") {
-                            auth.openTerminalLogin(kind, executable: exe)
+                        Button(state.isLoggedIn ? "重新登录" : "使用 Google 登录") {
+                            checksOnReturn = true
+                            auth.login(kind, executable: exe)
                         }
+                        .help(state.isLoggedIn ? "在终端退出当前会话后重新授权" : "在终端发起 Google 授权")
                     } else {
-                        Button(state.isLoggedIn ? "重新登录" : "使用 ChatGPT 登录") {
+                        Button(state.isLoggedIn ? "重新登录" : "通过 Codex CLI 登录") {
                             auth.login(kind, executable: exe)
                         }
                     }
-                    if kind != .antigravity {
-                        Button("在终端中登录") { auth.openTerminalLogin(kind, executable: exe) }
-                    }
-                    if state.isLoggedIn && kind != .antigravity {
+                    if state.isLoggedIn {
                         Button("退出登录", role: .destructive) {
+                            if kind == .antigravity { checksOnReturn = true }
                             Task { await auth.logout(kind, executable: exe) }
                         }
+                        .help(kind == .antigravity ? "打开终端完成 Google 账号退出" : "退出当前账号")
                     }
                     Spacer()
+                }
+                if auth.canContinueLoginInTerminal(kind) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("浏览器登录未完成，可以在终端中继续。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("在终端中继续") {
+                            checksOnReturn = true
+                            auth.continueLoginInTerminal(kind, executable: exe)
+                        }
+                    }
                 }
             }
 
             if let log = auth.logs[kind], !log.trimmed.isEmpty {
-                ScrollView {
-                    Text(log)
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                DisclosureGroup("登录详情") {
+                    ScrollView {
+                        Text(log)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 110)
                 }
-                .frame(maxHeight: 110)
             }
         } header: {
             Text("账号")
-        } footer: {
-            if kind == .antigravity {
-                Text("在终端中运行 agy，按提示用 Google 账号登录（退出登录可在 agy 里输入 /logout）。凭据由 agy 保存在 ~/.gemini，DesignStudio 不会读取或保存你的令牌，只检查登录凭据是否存在。")
-            } else {
-                Text("登录流程与凭据完全由官方 CLI 管理（保存在系统钥匙串），DesignStudio 不会读取或保存你的令牌。如果后台登录卡住，请使用「在终端中登录」。")
-            }
         }
         .task(id: exe) {
             if case .unknown = auth.state(kind) { await auth.refresh(kind, executable: exe) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            guard checksOnReturn else { return }
+            checksOnReturn = false
+            if auth.state(kind) != .checking && !auth.loginInProgress.contains(kind) {
+                Task { await auth.refresh(kind, executable: exe) }
+            }
         }
     }
 }
