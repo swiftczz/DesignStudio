@@ -8,14 +8,14 @@ struct ProjectWorkspaceView: View {
     @State private var batchExport: CanvasExportJob?
     @State private var comparedVersion: DesignVersion?
     @State private var loadsWebContent = false
-    /// 对话栏宽度：拖动分隔线调整，所有项目共用并记住
-    @AppStorage("chatPanelWidth") private var chatWidth: Double = ChatPanelDivider.defaultWidth
+    /// 对话栏宽度：拖动右边缘调整，所有项目共用并记住
+    @AppStorage("chatPanelWidth") private var chatWidth: Double = ChatPanelResizeHandle.defaultWidth
 
     var body: some View {
         GeometryReader { geometry in
             let stacked = geometry.size.width < 700
-            let availableWidth = max(ChatPanelDivider.minWidth, geometry.size.width - 410)
-            let panelWidth = min(ChatPanelDivider.clamp(chatWidth), availableWidth)
+            let availableWidth = max(ChatPanelResizeHandle.minWidth, geometry.size.width - 410)
+            let panelWidth = min(ChatPanelResizeHandle.clamp(chatWidth), availableWidth)
             let panelExtent = stacked ? min(270, geometry.size.height * 0.37) : panelWidth
             WorkspaceLayout(stacked: stacked, panelExtent: panelExtent) {
                 InfiniteCanvasView(session: session, loadsWebContent: loadsWebContent)
@@ -24,20 +24,16 @@ struct ProjectWorkspaceView: View {
                 if session.showChat {
                     ChatPanel(session: session, loadsHistory: loadsWebContent)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .overlay(alignment: stacked ? .top : .trailing) {
-                            if stacked {
-                                Divider().frame(height: 1)
-                            } else {
-                                ChatPanelDivider(width: Binding(
-                                    get: { panelWidth },
-                                    set: { chatWidth = min($0, availableWidth) }
-                                ))
-                                .frame(width: 1)
-                                .ignoresSafeArea(.container, edges: .top)
-                            }
-                        }
                         .transition(.opacity)
                         .zIndex(1)
+                    if !stacked {
+                        ChatPanelResizeHandle(width: Binding(
+                            get: { panelWidth },
+                            set: { chatWidth = min($0, availableWidth) }
+                        ))
+                        .transition(.opacity)
+                        .zIndex(2)
+                    }
                 }
             }
         }
@@ -131,15 +127,21 @@ private struct WorkspaceLayout: Layout {
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         guard let canvas = subviews.first else { return }
         let panel = subviews.dropFirst().first
+        let resizeHandle = subviews.dropFirst(2).first
         let extent = panel == nil ? 0 : panelExtent
-        let canvasWidth = max(0, bounds.width - (stacked ? 0 : extent))
+        // 热区占用独立空间，避免画布 WebView 或对话栏拦截拖动。
+        let resizeWidth = resizeHandle == nil ? 0 : ChatPanelResizeHandle.hitWidth
+        let chatWidth = stacked ? 0 : extent + resizeWidth
+        let canvasWidth = max(0, bounds.width - chatWidth)
         let canvasHeight = max(0, bounds.height - (stacked ? extent : 0))
-        let canvasOrigin = CGPoint(x: bounds.minX + (stacked ? 0 : extent), y: bounds.minY)
+        let canvasOrigin = CGPoint(x: bounds.minX + chatWidth, y: bounds.minY)
         canvas.place(at: canvasOrigin, anchor: .topLeading, proposal: ProposedViewSize(width: canvasWidth, height: canvasHeight))
         let panelOrigin = CGPoint(x: bounds.minX, y: bounds.minY + (stacked ? canvasHeight : 0))
         panel?.place(at: panelOrigin, anchor: .topLeading,
                      proposal: ProposedViewSize(width: stacked ? bounds.width : extent,
                                                 height: stacked ? extent : bounds.height))
+        resizeHandle?.place(at: CGPoint(x: bounds.minX + extent, y: bounds.minY), anchor: .topLeading,
+                            proposal: ProposedViewSize(width: resizeWidth, height: bounds.height))
     }
 }
 
@@ -417,49 +419,36 @@ private struct CanvasExportSheet: View {
     }
 }
 
-/// 对话栏右侧的分隔线：左右拖动调整对话栏宽度，双击恢复默认宽度。
-/// 可见的仍是 1pt 的系统分隔线，两侧各留出几 pt 的透明拖动区域
-struct ChatPanelDivider: View {
+/// 与对话栏同色的拖动热区，双击恢复默认宽度。
+private struct ChatPanelResizeHandle: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var width: Double
     @State private var dragStart: Double?
-    @State private var hovering = false
 
     static let defaultWidth: Double = 360
     static let minWidth: Double = 300
     static let maxWidth: Double = 640
+    nonisolated static let hitWidth: CGFloat = 9
 
     static func clamp(_ w: Double) -> Double { min(max(w, minWidth), maxWidth) }
 
     var body: some View {
-        Divider()
-            .overlay {
-                Rectangle()
-                    .fill(Color.primary.opacity(hovering || dragStart != nil ? 0.18 : 0))
-                    .frame(width: 2)
-                    .animation(reduceMotion ? nil : WorkspaceMotion.hover.delay(hovering ? 0.25 : 0), value: hovering)
-            }
-            .overlay {
-                Color.clear
-                    .frame(width: 9)
-                    .contentShape(.rect)
-                    .pointerStyle(.columnResize)
-                    .onHover { hovering = $0 }
-                    .gesture(
-                        DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                            .onChanged { v in
-                                let start = dragStart ?? Self.clamp(width)
-                                if dragStart == nil { dragStart = start }
-                                width = Self.clamp(start + v.translation.width)
-                            }
-                            .onEnded { _ in dragStart = nil }
-                    )
-                    // 与拖动手势并存：单独的 onTapGesture 会被拖动手势吞掉
-                    .simultaneousGesture(TapGesture(count: 2).onEnded {
-                        withAnimation(reduceMotion ? nil : WorkspaceMotion.panel) { width = Self.defaultWidth }
-                    })
-                    .help("拖动调整对话栏宽度，双击恢复默认")
-            }
-            .zIndex(1)
+        Color(nsColor: .windowBackgroundColor)
+            .frame(width: Self.hitWidth)
+            .contentShape(.rect)
+            .pointerStyle(.columnResize)
+            .gesture(
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                    .onChanged { value in
+                        let start = dragStart ?? Self.clamp(width)
+                        if dragStart == nil { dragStart = start }
+                        width = Self.clamp(start + value.translation.width)
+                    }
+                    .onEnded { _ in dragStart = nil }
+            )
+            .simultaneousGesture(TapGesture(count: 2).onEnded {
+                withAnimation(reduceMotion ? nil : WorkspaceMotion.panel) { width = Self.defaultWidth }
+            })
+            .help("拖动对话栏右边缘调整宽度，双击恢复默认")
     }
 }
