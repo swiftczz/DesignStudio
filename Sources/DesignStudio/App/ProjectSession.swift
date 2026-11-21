@@ -51,8 +51,33 @@ final class ProjectSession {
 
     // MARK: 面板
     var showChat = true
-    /// 进入项目时只显示对话栏和画布，检查器按需打开
-    var showInspector = false
+    var showCanvas: Bool {
+        get { app.settings.hiddenCanvasProjectIDs?.contains(projectID) != true }
+        set {
+            guard newValue != showCanvas else { return }
+            if newValue {
+                app.settings.hiddenCanvasProjectIDs?.remove(projectID)
+            } else {
+                exitFullScreen()
+                canvasFocused = false
+                isEditingText = false
+                app.settings.hiddenCanvasProjectIDs = (app.settings.hiddenCanvasProjectIDs ?? []).union([projectID])
+            }
+            app.saveSettings()
+        }
+    }
+    var showInspector: Bool {
+        get { app.settings.openInspectorProjectIDs?.contains(projectID) == true }
+        set {
+            guard newValue != showInspector else { return }
+            if newValue {
+                app.settings.openInspectorProjectIDs = (app.settings.openInspectorProjectIDs ?? []).union([projectID])
+            } else {
+                app.settings.openInspectorProjectIDs?.remove(projectID)
+            }
+            app.saveSettings()
+        }
+    }
     var showAskAI = false {
         didSet { if showAskAI && !oldValue { askSelection = selection } }
     }
@@ -223,11 +248,16 @@ final class ProjectSession {
         return h
     }
 
-    var requiredLiveArtboards: Set<UUID> {
+    var artboardsNeededForEditing: Set<UUID> {
         var ids = Set(artboardLoadRequests.keys)
+        if isGenerating, let generationElement { ids.insert(generationElement.selection.artboardID) }
+        return ids
+    }
+
+    var requiredLiveArtboards: Set<UUID> {
+        var ids = artboardsNeededForEditing
         if let selection { ids.insert(selection.artboardID) }
         if let previewArtboardID, !previewShowsAll { ids.insert(previewArtboardID) }
-        if isGenerating, let generationElement { ids.insert(generationElement.selection.artboardID) }
         return ids
     }
 
@@ -327,7 +357,7 @@ final class ProjectSession {
 
     func viewportDidChange(_ size: CGSize) {
         // SwiftUI 初次布局可能先给出临时尺寸，等工具栏和侧栏有空间后再适配。
-        guard size.width > 200, size.height > 200 else { return }
+        guard showCanvas, size.width > 200, size.height > 200 else { return }
         let previous = viewportSize
         viewportSize = size
         if Date() < refitUntil {
@@ -1918,6 +1948,7 @@ final class ProjectSession {
             requestNotice = "画板「\(target.artboardName)」已删除。"
             return
         }
+        showCanvas = true
         switchPage(pageID)
         let boardSelection = CanvasSelection(artboardID: target.artboardID, elementID: nil)
         select(boardSelection)
@@ -1945,6 +1976,7 @@ final class ProjectSession {
             requestNotice = "这条消息对应的画布已删除。"
             return
         }
+        showCanvas = true
         switchPage(id)
     }
 

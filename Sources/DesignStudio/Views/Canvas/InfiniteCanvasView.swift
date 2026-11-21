@@ -69,8 +69,9 @@ struct InfiniteCanvasView: View {
             let zoom = session.zoom
             let viewport = CGRect(origin: session.worldPoint(.zero),
                                   size: CGSize(width: geo.size.width / zoom, height: geo.size.height / zoom))
-            let loading = CanvasArtboardLoadPlan(boards: boards, viewport: viewport, zoom: zoom,
-                                                required: session.requiredLiveArtboards,
+            // 对话模式下只加载元素定位或编辑实际需要的画板。
+            let loading = CanvasArtboardLoadPlan(boards: boards, viewport: session.showCanvas ? viewport : .null, zoom: zoom,
+                                                required: session.showCanvas ? session.requiredLiveArtboards : session.artboardsNeededForEditing,
                                                 retainsVisitedBoards: session.interactivePreview) { board in
                 !session.interactivePreview && !session.showInspector && session.tweakValues.isEmpty
                     && max(board.width, board.height) * zoom <= 180
@@ -145,6 +146,9 @@ struct InfiniteCanvasView: View {
             .background(CanvasEventMonitor(session: session))
             .onAppear { session.viewportDidChange(geo.size) }
             .onChange(of: geo.size) { _, size in session.viewportDidChange(size) }
+            .onChange(of: session.showCanvas) { _, visible in
+                if visible { session.viewportDidChange(geo.size) }
+            }
             .task(id: loadsWebContent ? loading : nil) {
                 guard loadsWebContent else { return }
                 await updateArtboards(loading)
@@ -168,7 +172,7 @@ struct InfiniteCanvasView: View {
             if tool == .note || tool == .pencil { focused = true }
         }
         .onKeyPress(phases: .down) { press in
-            guard !session.isEditingText else { return .ignored }
+            guard session.showCanvas, !session.isEditingText else { return .ignored }
             let key: String = switch press.key {
             case .delete: "backspace"
             case .deleteForward: "delete"
@@ -1274,7 +1278,7 @@ private struct CanvasEventMonitor: NSViewRepresentable {
 
         /// 返回 true 表示事件已被画布处理
         private func consume(_ event: NSEvent) -> Bool {
-            guard let session, let window, event.window === window else { return false }
+            guard let session, session.showCanvas, let window, event.window === window else { return false }
             let p = convert(event.locationInWindow, from: nil)
             guard bounds.contains(p) else { return false }
             // 文本输入等浮层在画布上方时不拦截

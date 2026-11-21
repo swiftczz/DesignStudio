@@ -322,6 +322,8 @@ nonisolated struct AppSettings: Codable, Sendable {
     var defaultProviderID: UUID?
     var defaultDesignSystemID: UUID?
     var pinnedProjectIDs: Set<UUID>?
+    var hiddenCanvasProjectIDs: Set<UUID>?
+    var openInspectorProjectIDs: Set<UUID>?
     /// 主题色（ThemeColor.rawValue），为空时用默认的陶土橙
     var accentTheme: String?
     /// 旧版本的自动检查偏好，首次启动 Sparkle 时迁移。

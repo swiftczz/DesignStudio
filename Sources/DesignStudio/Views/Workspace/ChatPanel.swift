@@ -563,14 +563,18 @@ private struct VersionChip: View {
     @Bindable var session: ProjectSession
 
     private var isCurrent: Bool { session.project?.currentVersion?.id == version.id }
-    private var isShown: Bool { isCurrent }
+    private var isShown: Bool { isCurrent && session.showCanvas }
     private var boardCount: Int { version.document?.allArtboards.count ?? 1 }
 
     @State private var hovering = false
 
     var body: some View {
         Button {
-            if !isCurrent { session.restore(version) }
+            if isCurrent {
+                session.showCanvas = true
+            } else {
+                session.restore(version)
+            }
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: "rectangle.on.rectangle")
@@ -591,13 +595,17 @@ private struct VersionChip: View {
                             Text("可能被截断").font(.caption2).foregroundStyle(.orange)
                         }
                     }
-                    Text(isCurrent ? "\(boardCount) 个画板 · 正在画布中显示" : "\(boardCount) 个画板")
+                    Text(isShown ? "\(boardCount) 个画板 · 正在画布中显示" : "\(boardCount) 个画板")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
                 // 非当前版本：悬停时出现「恢复」提示
-                if !isCurrent {
+                if isCurrent && !isShown {
+                    Label("查看画布", systemImage: "arrow.right")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Theme.accent)
+                } else if !isCurrent {
                     Label("恢复整个版本", systemImage: "arrow.uturn.backward")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -607,7 +615,7 @@ private struct VersionChip: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             .frame(maxWidth: 320, alignment: .leading)
-            .background(Color.primary.opacity(hovering && !isCurrent ? 0.035 : 0), in: .rect(cornerRadius: 12))
+            .background(Color.primary.opacity(hovering && !isShown ? 0.035 : 0), in: .rect(cornerRadius: 12))
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
                     .strokeBorder(Color.primary.opacity(isShown ? 0.2 : 0.1), lineWidth: 1)
@@ -618,7 +626,7 @@ private struct VersionChip: View {
         .disabled(!isCurrent && !session.canRestoreVersion)
         .onHover { hovering = $0 }
         .animation(reduceMotion ? nil : WorkspaceMotion.hover, value: hovering)
-        .help(isCurrent ? "画布当前显示的版本" : "恢复整个版本（可撤销）")
+        .help(isCurrent ? (isShown ? "画布当前显示的版本" : "查看画布") : "恢复整个版本（可撤销）")
     }
 }
 

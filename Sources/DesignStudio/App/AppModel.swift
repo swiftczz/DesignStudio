@@ -113,6 +113,7 @@ final class AppModel {
         persistence.save(p)
 
         let s = session(for: p.id)
+        s.showCanvas = false
         s.draft = prompt
         s.draftAttachments = attachments
         route = .project(p.id)
@@ -227,6 +228,8 @@ final class AppModel {
         sessions[id] = nil
         projects.removeAll { $0.id == id }
         settings.pinnedProjectIDs?.remove(id)
+        settings.hiddenCanvasProjectIDs?.remove(id)
+        settings.openInspectorProjectIDs?.remove(id)
         saveSettings()
         thumbnailStamps[id] = nil
         thumbnailCache[id] = nil
@@ -252,7 +255,8 @@ final class AppModel {
     func performUndo(redo: Bool) {
         let action = Selector(redo ? "redo:" : "undo:")
         let responder = NSApp.keyWindow?.firstResponder
-        if responder is NSTextView || MarkdownContentView.contains(responder) || activeSession == nil || activeSession?.isEditingText == true {
+        if responder is NSTextView || MarkdownContentView.contains(responder)
+            || activeSession?.showCanvas != true || activeSession?.isEditingText == true {
             NSApp.sendAction(action, to: nil, from: nil)
             return
         }
@@ -289,7 +293,7 @@ final class AppModel {
     }
 
     private func canvasOwnsKeyboard(_ s: ProjectSession) -> Bool {
-        guard !s.isEditingText else { return false }
+        guard s.showCanvas, !s.isEditingText else { return false }
         let responder = NSApp.keyWindow?.firstResponder
         if responder is NSTextView || MarkdownContentView.contains(responder) { return false }
         if responder is WKWebView { return !s.interactivePreview }

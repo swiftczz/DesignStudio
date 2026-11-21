@@ -6,6 +6,48 @@ import Testing
 
 @MainActor
 struct ProjectWorkflowTests {
+    @Test(.timeLimit(.minutes(1)))
+    func newDesignsStartInChatAndRememberCanvasVisibilityPerProject() async throws {
+        let folder = try TempWorkspace.make(prefix: "workspace visibility")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let persistence = PersistenceController(root: folder)
+        let existing = Project(name: "已有项目", kind: .prototype)
+        persistence.save(existing)
+        #expect(persistence.flush())
+
+        let app = AppModel(persistence: persistence) { _ in WorkspaceDesignProvider() }
+        app.providers = [ProviderProfile(name: "Test", kind: .codex)]
+        let id = app.createProject(prompt: "设计一个冥想 App", kind: .prototype,
+                                   designSystemID: nil, model: ModelChoice(), attachments: [])
+        let session = app.session(for: id)
+        #expect(app.route == .project(id))
+        #expect(!session.showCanvas)
+        #expect(app.session(for: existing.id).showCanvas)
+
+        let busy = Observations { session.isPreparingRequest || session.isGenerating }
+        for await isBusy in busy {
+            if !isBusy { break }
+        }
+        #expect(session.document.allArtboards.count == 1)
+        #expect(app.project(id)?.versions.count == 1)
+        #expect(!session.showCanvas)
+
+        session.showCanvas = true
+        session.showInspector = true
+        session.showCanvas = false
+        #expect(persistence.flush())
+
+        let reopened = AppModel(persistence: PersistenceController(root: folder))
+        let reopenedSession = reopened.session(for: id)
+        #expect(!reopenedSession.showCanvas)
+        reopenedSession.showCanvas = true
+        #expect(reopenedSession.showInspector)
+        #expect(reopened.session(for: existing.id).showCanvas)
+
+        let saved = try #require(persistence.load(AppSettings.self, file: "settings.json"))
+        #expect(saved.hiddenCanvasProjectIDs?.contains(id) == false)
+    }
+
     @Test func compareVersionsAndRestoreOnlyOneArtboardWithHistoricalStyles() throws {
         let folder = try TempWorkspace.make(prefix: "restore-artboard")
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -424,6 +466,21 @@ struct ProjectWorkflowTests {
         let rendered = try await CanvasExportRenderer.render(first, kind: .prototype, png: true)
         let png = try #require(rendered.png)
         #expect(png.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]))
+    }
+}
+
+private struct WorkspaceDesignProvider: LLMProvider {
+    nonisolated func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.text("""
+                <!-- project-title: 冥想 App -->
+                完成了今日推荐画板。
+                ```html artboard="今日推荐" width=390 height=844
+                <!doctype html><html><body><h1>今日推荐</h1></body></html>
+                ```
+                """))
+            continuation.finish()
+        }
     }
 }
 

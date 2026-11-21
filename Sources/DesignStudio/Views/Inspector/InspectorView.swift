@@ -1,6 +1,7 @@
 import SwiftUI
+import AppKit
 
-/// 右侧检查器：属性（图层树 + 属性）/ 代码 / 调整
+/// 右侧检查器：图层与属性、代码、调整和项目设置。
 struct InspectorView: View {
     @Bindable var session: ProjectSession
     @State private var tab: Tab = .properties
@@ -9,6 +10,7 @@ struct InspectorView: View {
         case properties = "属性"
         case code = "代码"
         case tweaks = "调整"
+        case project = "项目"
         var id: String { rawValue }
     }
 
@@ -28,11 +30,62 @@ struct InspectorView: View {
                     CodeView(session: session)
                 case .tweaks:
                     TweaksView(session: session)
+                case .project:
+                    ProjectSettingsView(session: session)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(maxHeight: .infinity, alignment: .top)
+    }
+}
+
+private struct ProjectSettingsView: View {
+    @Environment(AppModel.self) private var app
+    let session: ProjectSession
+
+    var body: some View {
+        if let project = session.project {
+            Form {
+                Section {
+                    TextField("名称", text: Binding(
+                        get: { project.displayName },
+                        set: { app.rename(project.id, to: $0) }
+                    ))
+                    Picker("类型", selection: Binding(
+                        get: { project.kind },
+                        set: { kind in app.updateProject(project.id) { $0.kind = kind } }
+                    )) {
+                        ForEach(ProjectKind.homeKinds) { kind in
+                            Label(kind.title, systemImage: kind.symbol).tag(kind)
+                        }
+                        if !ProjectKind.homeKinds.contains(project.kind) {
+                            Label(project.kind.title, systemImage: project.kind.symbol).tag(project.kind)
+                        }
+                    }
+                    Picker("设计系统", selection: Binding(
+                        get: { project.designSystemID },
+                        set: { id in app.updateProject(project.id) { $0.designSystemID = id } }
+                    )) {
+                        Text("无").tag(UUID?.none)
+                        ForEach(app.designSystems) { system in Text(system.name).tag(UUID?.some(system.id)) }
+                    }
+                }
+                Section {
+                    LabeledContent("版本数", value: "\(project.versions.count)")
+                    if let usage = session.lastUsage {
+                        LabeledContent("上次用量", value: "输入 \(usage.input) · 输出 \(usage.output) tokens")
+                    }
+                }
+                Section {
+                    Button("在 Finder 中显示项目文件", systemImage: "folder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([app.persistence.projectDirectory(project.id)])
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+            .formStyle(.grouped)
+        }
     }
 }
 

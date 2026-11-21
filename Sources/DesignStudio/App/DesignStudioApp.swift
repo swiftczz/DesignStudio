@@ -78,6 +78,11 @@ struct AppCommands: Commands {
     @Environment(\.openWindow) private var openWindow
     @FocusedBinding(\.composerAttachments) private var composerAttachments
 
+    private var canvasSession: ProjectSession? {
+        guard let session = app.activeSession, session.showCanvas else { return nil }
+        return session
+    }
+
     private func paste() {
         if let current = composerAttachments,
            let pasted = AttachmentImporter.pastedAttachments(from: .general) {
@@ -128,39 +133,49 @@ struct AppCommands: Commands {
                 .keyboardShortcut("v", modifiers: [.command, .option])
         }
         CommandMenu("设计") {
-            Button("批注工具") { app.activeSession?.tool = .comment }
+            Button("批注工具") { canvasSession?.tool = .comment }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
-            Button("询问 AI") { app.activeSession?.showAskAI = true }
+                .disabled(canvasSession == nil)
+            Button("询问 AI") { canvasSession?.showAskAI = true }
                 .keyboardShortcut("j", modifiers: .command)
+                .disabled(canvasSession == nil)
             Button("停止生成") { app.activeSession?.stop() }
                 .keyboardShortcut(".", modifiers: .command)
             Divider()
-            Button("复制选中") { app.activeSession?.duplicateSelection() }
+            Button("复制选中") { canvasSession?.duplicateSelection() }
                 .keyboardShortcut("d", modifiers: .command)
+                .disabled(canvasSession == nil)
             Button("编组") { app.performCanvasCommand { $0.groupSelection() } }
                 .keyboardShortcut("g", modifiers: .command)
-                .disabled(!(app.activeSession?.canGroup ?? false))
+                .disabled(canvasSession?.canGroup != true)
             Button("取消编组") { app.performCanvasCommand { $0.ungroupSelection() } }
                 .keyboardShortcut("g", modifiers: [.command, .shift])
-                .disabled(!(app.activeSession?.canUngroup ?? false))
-            Button("新建画板") { app.activeSession?.addArtboard() }
-            Button("新建画布") { app.activeSession?.addPage() }
+                .disabled(canvasSession?.canUngroup != true)
+            Button("新建画板") { canvasSession?.addArtboard() }.disabled(canvasSession == nil)
+            Button("新建画布") { canvasSession?.addPage() }.disabled(canvasSession == nil)
             Divider()
-            Button("放大") { app.activeSession?.zoomIn() }
+            Button("放大") { canvasSession?.zoomIn() }
                 .keyboardShortcut("=", modifiers: .command)
-            Button("缩小") { app.activeSession?.zoomOut() }
+                .disabled(canvasSession == nil)
+            Button("缩小") { canvasSession?.zoomOut() }
                 .keyboardShortcut("-", modifiers: .command)
-            Button("实际大小") { app.activeSession?.zoomTo100() }
+                .disabled(canvasSession == nil)
+            Button("实际大小") { canvasSession?.zoomTo100() }
                 .keyboardShortcut("0", modifiers: .command)
-            Button("适应画布") { if let s = app.activeSession { s.isFullScreen ? s.fitFullScreen() : s.zoomToFit() } }
+                .disabled(canvasSession == nil)
+            Button("适应画布") { if let s = canvasSession { s.isFullScreen ? s.fitFullScreen() : s.zoomToFit() } }
                 .keyboardShortcut("1", modifiers: .command)
-            Button("缩放到选中") { app.activeSession?.zoomToSelection() }
+                .disabled(canvasSession == nil)
+            Button("缩放到选中") { canvasSession?.zoomToSelection() }
                 .keyboardShortcut("2", modifiers: .command)
+                .disabled(canvasSession == nil)
             Divider()
-            Button("显示 / 隐藏对话") { app.activeSession?.showChat.toggle() }
+            Button("显示 / 隐藏对话") { canvasSession?.showChat.toggle() }
                 .keyboardShortcut("l", modifiers: [.command, .option])
-            Button("全屏查看画板") { app.activeSession?.toggleArtboardFullScreen() }
+                .disabled(canvasSession == nil)
+            Button("全屏查看画板") { canvasSession?.toggleArtboardFullScreen() }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
+                .disabled(canvasSession == nil)
             Divider()
             Button("设计系统") { app.route = .designSystems }
                 .keyboardShortcut("d", modifiers: [.command, .shift])

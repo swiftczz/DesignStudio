@@ -17,23 +17,33 @@ struct ProjectWorkspaceView: View {
             let availableWidth = max(ChatPanelResizeHandle.minWidth, geometry.size.width - 410)
             let panelWidth = min(ChatPanelResizeHandle.clamp(chatWidth), availableWidth)
             let panelExtent = stacked ? min(270, geometry.size.height * 0.37) : panelWidth
-            WorkspaceLayout(stacked: stacked, panelExtent: panelExtent) {
-                InfiniteCanvasView(session: session, loadsWebContent: loadsWebContent)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .scrollEdgeEffectHidden(true, for: .top)
-                if session.showChat {
+            WorkspaceLayout(showsCanvas: session.showCanvas, stacked: stacked, panelExtent: panelExtent) {
+                Group {
+                    if session.showCanvas || !session.artboardsNeededForEditing.isEmpty {
+                        InfiniteCanvasView(session: session, loadsWebContent: loadsWebContent)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .scrollEdgeEffectHidden(true, for: .top)
+                            .opacity(session.showCanvas ? 1 : 0)
+                            .allowsHitTesting(session.showCanvas)
+                            .accessibilityHidden(!session.showCanvas)
+                            .background(Color(nsColor: .windowBackgroundColor))
+                    } else {
+                        Color(nsColor: .windowBackgroundColor).accessibilityHidden(true)
+                    }
+                }
+                if session.showChat || !session.showCanvas {
                     ChatPanel(session: session, loadsHistory: loadsWebContent)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .transition(.opacity)
                         .zIndex(1)
-                    if !stacked {
-                        ChatPanelResizeHandle(width: Binding(
-                            get: { panelWidth },
-                            set: { chatWidth = min($0, availableWidth) }
-                        ))
-                        .transition(.opacity)
-                        .zIndex(2)
-                    }
+                }
+                if session.showCanvas && session.showChat && !stacked {
+                    ChatPanelResizeHandle(width: Binding(
+                        get: { panelWidth },
+                        set: { chatWidth = min($0, availableWidth) }
+                    ))
+                    .transition(.opacity)
+                    .zIndex(2)
                 }
             }
         }
@@ -48,7 +58,10 @@ struct ProjectWorkspaceView: View {
         .sheet(item: $comparedVersion) { version in
             VersionArtboardComparison(session: session, version: version)
         }
-        .inspector(isPresented: $session.showInspector) {
+        .inspector(isPresented: Binding(
+            get: { session.showCanvas && session.showInspector },
+            set: { if session.showCanvas { session.showInspector = $0 } }
+        )) {
             InspectorView(session: session)
                 .inspectorColumnWidth(min: 280, ideal: 320, max: 460)
         }
@@ -76,47 +89,100 @@ struct ProjectWorkspaceView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        ToolbarItemGroup(placement: .primaryAction) {
-            Button {
-                session.undo()
-            } label: {
-                Label("撤销", systemImage: "arrow.uturn.backward")
-            }
-            .help("撤销画布上的修改（⌘Z）")
-            .disabled(!session.canUndo || !session.isEditable)
+        if session.showCanvas {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    session.undo()
+                } label: {
+                    Label("撤销", systemImage: "arrow.uturn.backward")
+                }
+                .help("撤销画布上的修改（⌘Z）")
+                .disabled(!session.canUndo || !session.isEditable)
 
-            Button {
-                session.redo()
-            } label: {
-                Label("重做", systemImage: "arrow.uturn.forward")
+                Button {
+                    session.redo()
+                } label: {
+                    Label("重做", systemImage: "arrow.uturn.forward")
+                }
+                .help("重做（⇧⌘Z）")
+                .disabled(!session.canRedo || !session.isEditable)
             }
-            .help("重做（⇧⌘Z）")
-            .disabled(!session.canRedo || !session.isEditable)
+            ToolbarSpacer(.fixed, placement: .primaryAction)
         }
 
-        ToolbarSpacer(.fixed, placement: .primaryAction)
+        if session.showCanvas {
+            ToolbarItem(placement: .primaryAction) {
+                toolbarCapsule {
+                    ExportMenu(session: session) { batchExport = $0 }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .scaleEffect(1.14)
+                        // 导出图标的视觉重心偏低，微调图标位置，胶囊仍保持居中。
+                        .offset(y: -2)
+                        .frame(width: 26, height: 26)
+                }
+            }
+            .sharedBackgroundVisibility(.hidden)
 
-        ToolbarItemGroup(placement: .primaryAction) {
-            VersionHistoryButton(session: session) { comparedVersion = $0 }
-            ProjectSettingsButton(session: session)
-            ExportMenu(session: session) { batchExport = $0 }
+            ToolbarSpacer(.fixed, placement: .primaryAction)
         }
+
+        ToolbarItem(placement: .primaryAction) {
+            toolbarCapsule {
+                VersionHistoryButton(session: session) { comparedVersion = $0 }
+                    .buttonStyle(.borderless)
+            }
+        }
+        .sharedBackgroundVisibility(.hidden)
 
         ToolbarSpacer(.fixed, placement: .primaryAction)
 
         ToolbarItem(placement: .primaryAction) {
-            Button {
-                session.showInspector.toggle()
-            } label: {
-                Label("检查器", systemImage: "sidebar.trailing")
+            let label: LocalizedStringKey = session.showCanvas ? "隐藏画布" : "打开画布"
+            toolbarCapsule {
+                Button {
+                    session.showCanvas.toggle()
+                } label: {
+                    Label(label, systemImage: "rectangle.on.rectangle")
+                        .labelStyle(.iconOnly)
+                        .font(.system(size: 15))
+                        .frame(width: 26, height: 26)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.borderless)
+                .help(label)
             }
-            .help("图层 / 属性 / 代码 / 调整")
         }
+        .sharedBackgroundVisibility(.hidden)
+
+        if session.showCanvas {
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    session.showInspector.toggle()
+                } label: {
+                    Label("检查器", systemImage: "sidebar.trailing")
+                }
+                .help("图层 / 属性 / 代码 / 调整")
+            }
+        }
+    }
+
+    private func toolbarCapsule<Content: View>(content: () -> Content) -> some View {
+        content()
+            .font(.system(size: 16))
+            .tint(.primary)
+            .padding(.horizontal, 6)
+            .frame(height: 34)
+            .fixedSize()
+            .glassEffect(.regular, in: .capsule)
     }
 }
 
-/// 两种排列复用同一个对话和画布，保留滚动、焦点与 WebKit 状态。
+/// 切换画布时复用同一个对话栏，保留滚动位置和编辑焦点。
 private struct WorkspaceLayout: Layout {
+    let showsCanvas: Bool
     let stacked: Bool
     let panelExtent: CGFloat
 
@@ -127,6 +193,13 @@ private struct WorkspaceLayout: Layout {
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         guard let canvas = subviews.first else { return }
         let panel = subviews.dropFirst().first
+        if !showsCanvas {
+            canvas.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(bounds.size))
+            let width = min(bounds.width, 680)
+            panel?.place(at: CGPoint(x: bounds.midX - width / 2, y: bounds.minY), anchor: .topLeading,
+                         proposal: ProposedViewSize(width: width, height: bounds.height))
+            return
+        }
         let resizeHandle = subviews.dropFirst(2).first
         let extent = panel == nil ? 0 : panelExtent
         // 热区占用独立空间，避免画布 WebView 或对话栏拦截拖动。
@@ -157,6 +230,9 @@ private struct VersionHistoryButton: View {
             shown.toggle()
         } label: {
             Label("版本历史", systemImage: "clock.arrow.circlepath")
+                .labelStyle(.iconOnly)
+                .frame(width: 26, height: 26)
+                .contentShape(.rect)
         }
         .help("版本历史")
         .popover(isPresented: $shown, arrowEdge: .bottom) {
@@ -238,58 +314,6 @@ private struct VersionHistoryList: View {
     }
 }
 
-// MARK: - 项目设置
-
-private struct ProjectSettingsButton: View {
-    @Environment(AppModel.self) private var app
-    @Bindable var session: ProjectSession
-    @State private var shown = false
-
-    var body: some View {
-        Button {
-            shown.toggle()
-        } label: {
-            Label("项目设置", systemImage: "info.circle")
-        }
-        .help("项目名称、类型与设计系统")
-        .popover(isPresented: $shown, arrowEdge: .bottom) {
-            if let project = session.project {
-                Form {
-                    TextField("名称", text: Binding(
-                        get: { project.displayName },
-                        set: { app.rename(project.id, to: $0) }
-                    ))
-                    Picker("类型", selection: Binding(
-                        get: { project.kind },
-                        set: { newKind in app.updateProject(project.id) { $0.kind = newKind } }
-                    )) {
-                        ForEach(ProjectKind.homeKinds) { k in Label(k.title, systemImage: k.symbol).tag(k) }
-                        if !ProjectKind.homeKinds.contains(project.kind) {
-                            Label(project.kind.title, systemImage: project.kind.symbol).tag(project.kind)
-                        }
-                    }
-                    Picker("设计系统", selection: Binding(
-                        get: { project.designSystemID },
-                        set: { newID in app.updateProject(project.id) { $0.designSystemID = newID } }
-                    )) {
-                        Text("无").tag(UUID?.none)
-                        ForEach(app.designSystems) { ds in Text(ds.name).tag(UUID?.some(ds.id)) }
-                    }
-                    LabeledContent("版本数", value: "\(project.versions.count)")
-                    if let u = session.lastUsage {
-                        LabeledContent("上次用量", value: "输入 \(u.input) · 输出 \(u.output) tokens")
-                    }
-                    Button("在 Finder 中显示项目文件") {
-                        NSWorkspace.shared.activateFileViewerSelecting([app.persistence.projectDirectory(project.id)])
-                    }
-                }
-                .formStyle(.grouped)
-                .frame(width: 360)
-            }
-        }
-    }
-}
-
 // MARK: - 导出
 
 struct ExportMenu: View {
@@ -342,6 +366,7 @@ struct ExportMenu: View {
             }
         } label: {
             Label("导出", systemImage: "square.and.arrow.up")
+                .labelStyle(.iconOnly)
         }
         .accessibilityLabel("导出")
         .help("导出整个画布与交接")
