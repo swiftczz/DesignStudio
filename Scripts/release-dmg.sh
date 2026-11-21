@@ -2,7 +2,7 @@
 # 打包发布用的 DMG：Apple 芯片（arm64）→ 签名 →（可选）公证 → dist/DesignStudio-<版本>.dmg
 #
 # 用法：
-#   ./Scripts/release-dmg.sh                 # 版本号取 Support/Info.plist
+#   ./Scripts/release-dmg.sh                 # 版本号取最近可达的发布标签
 #   ./Scripts/release-dmg.sh 1.2.0           # 指定版本号
 #
 # 签名（自动选择，也可用环境变量指定）：
@@ -20,8 +20,7 @@ cd "$(dirname "$0")/.."
 APP_NAME="DesignStudio"
 APP="build/${APP_NAME}.app"
 
-VERSION="${1:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Support/Info.plist)}"
-DMG="dist/${APP_NAME}-${VERSION}.dmg"
+VERSION="${1:-${VERSION:-}}"
 
 # ---------- 签名身份 ----------
 if [ -z "${DEVELOPER_ID:-}" ]; then
@@ -43,6 +42,8 @@ fi
 # ---------- 编译并打包 .app ----------
 SIGN_IDENTITY="${SIGN_IDENTITY}" VERSION="${VERSION}" \
   ./Scripts/build-app.sh release
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${APP}/Contents/Info.plist")"
+DMG="dist/${APP_NAME}-${VERSION}.dmg"
 
 echo "▶︎ 检查签名"
 codesign --verify --deep --strict "${APP}"
@@ -76,8 +77,8 @@ DesignStudio ${VERSION} 安装说明
    （也可以在终端运行：xattr -dr com.apple.quarantine /Applications/DesignStudio.app）
 
 系统要求：搭载 Apple 芯片的 Mac，运行 macOS 26 或更新版本。
-使用 Claude / Codex / Antigravity 账号登录生成设计时，需要先安装对应的命令行工具（claude / codex / agy），
-在应用的「设置 → 模型与账号」里可以看到安装命令；也可以直接填写 DeepSeek、OpenAI 等服务商的 API Key。
+在「设置 → 模型与账号」可用 ChatGPT 浏览器授权直连，也可填写 DeepSeek、OpenAI 等服务商的 API Key。
+使用 Claude Code、Codex CLI 或 Antigravity 来源时，需要安装对应的命令行工具（claude / codex / agy）。
 EOF
 fi
 
