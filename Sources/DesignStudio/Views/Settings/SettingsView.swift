@@ -166,14 +166,7 @@ struct ProviderDetailView: View {
                 } else {
                     Picker("接口类型", selection: Binding(
                         get: { binding.wrappedValue.kind },
-                        set: { newKind in
-                            // 已知服务商的地址跟着类型切换（例如 DeepSeek …/v1 ↔ …/anthropic）
-                            if let switched = ProviderPreset.switching(baseURL: binding.wrappedValue.baseURL, to: newKind) {
-                                binding.wrappedValue.baseURL = switched.url
-                                binding.wrappedValue.useBearerAuth = switched.bearer
-                            }
-                            binding.wrappedValue.kind = newKind
-                        }
+                        set: { binding.wrappedValue.switchAPIKind(to: $0) }
                     )) {
                         ForEach(ProviderKind.apiKinds) { k in
                             Text(k.title).tag(k)
@@ -395,7 +388,7 @@ struct ProviderDetailView: View {
             Text("接口")
         } footer: {
             Text("请求 \(profile.kind.endpointHint)。"
-                 + (profile.kind == .anthropicAPI ? "官方接口使用 x-api-key；多数国内兼容端点需要开启 Bearer 认证。" : "")
+                 + (profile.kind == .anthropicAPI ? "默认使用 Bearer 认证。只接受 x-api-key 的端点可以关闭此选项。" : "")
                  + "API Key 只保存在本机的应用数据目录（secrets.json），不使用系统钥匙串。")
         }
 

@@ -383,14 +383,34 @@ struct ProviderPresetTests {
         #expect(Set(names).count == names.count)
         #expect(names.filter { $0.contains("DeepSeek") }.count == 1)
 
-        let toAnthropic = ProviderPreset.switching(baseURL: "https://api.deepseek.com/v1/", to: .anthropicAPI)
-        #expect(toAnthropic?.url == "https://api.deepseek.com/anthropic")
-        #expect(toAnthropic?.bearer == true)
-        #expect(ProviderPreset.switching(baseURL: "https://api.deepseek.com/anthropic", to: .openAIResponses)?.url
-                == "https://api.deepseek.com/v1")
+        var profile = ProviderProfile(name: "DeepSeek", kind: .openAICompatible, baseURL: "https://api.deepseek.com/v1/")
+        profile.switchAPIKind(to: .anthropicAPI)
+        #expect(profile.baseURL == "https://api.deepseek.com/anthropic")
+        #expect(profile.useBearerAuth)
+        profile.switchAPIKind(to: .openAIResponses)
+        #expect(profile.baseURL == "https://api.deepseek.com/v1")
         // 自定义地址或该服务商没有对应类型的地址时保持不变
         #expect(ProviderPreset.switching(baseURL: "https://my.proxy/v1", to: .anthropicAPI) == nil)
         #expect(ProviderPreset.switching(baseURL: "https://api.siliconflow.cn/v1", to: .anthropicAPI) == nil)
+    }
+
+    @Test func defaultsToBearerForAnthropicAndPreservesSavedOptOut() throws {
+        #expect(ProviderProfile.anthropic().useBearerAuth)
+        for preset in ProviderPreset.all where preset.kind == .anthropicAPI {
+            #expect(preset.makeProfile().useBearerAuth)
+        }
+
+        var custom = ProviderProfile(name: "自定义", kind: .openAICompatible, baseURL: "https://my.proxy/v1")
+        custom.switchAPIKind(to: .anthropicAPI)
+        #expect(custom.kind == .anthropicAPI)
+        #expect(custom.baseURL == "https://my.proxy/v1")
+        #expect(custom.useBearerAuth)
+
+        custom.useBearerAuth = false
+        custom.switchAPIKind(to: .anthropicAPI)
+        let saved = try JSONEncoder().encode(custom)
+        let restored = try JSONDecoder().decode(ProviderProfile.self, from: saved)
+        #expect(!restored.useBearerAuth)
     }
 }
 

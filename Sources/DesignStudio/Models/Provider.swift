@@ -103,21 +103,21 @@ nonisolated struct ProviderProfile: Codable, Identifiable, Hashable, Sendable {
     var modelLimits: [String: ModelLimits] = [:]
     var executablePath: String = ""
     var extraArguments: String = ""
-    var useBearerAuth: Bool = false
+    var useBearerAuth: Bool
     /// 每行一个 `Header: Value`
     var extraHeaders: String = ""
     /// 本次请求的思考强度（项目里选择的，不保存在来源配置里）；空字符串表示不指定，由 CLI / 服务商决定
     var effort: String = ""
 
     init(id: UUID = UUID(), name: String, kind: ProviderKind, baseURL: String = "", model: String = "",
-         models: [String] = [], useBearerAuth: Bool = false) {
+         models: [String] = [], useBearerAuth: Bool? = nil) {
         self.id = id
         self.name = name
         self.kind = kind
         self.baseURL = baseURL
         self.model = model
         self.models = models.isEmpty && !model.isEmpty ? [model] : models
-        self.useBearerAuth = useBearerAuth
+        self.useBearerAuth = useBearerAuth ?? (kind == .anthropicAPI)
     }
 
     // 新增字段都按「可缺省」解码，旧版本保存的 providers.json 仍能读取
@@ -141,6 +141,13 @@ nonisolated struct ProviderProfile: Codable, Identifiable, Hashable, Sendable {
         useBearerAuth = try c.decodeIfPresent(Bool.self, forKey: .useBearerAuth) ?? false
         extraHeaders = try c.decodeIfPresent(String.self, forKey: .extraHeaders) ?? ""
         if !kind.isCLI, models.isEmpty, !model.trimmed.isEmpty { models = [model.trimmed] }
+    }
+
+    mutating func switchAPIKind(to newKind: ProviderKind) {
+        guard newKind != kind else { return }
+        baseURL = ProviderPreset.switching(baseURL: baseURL, to: newKind) ?? baseURL
+        kind = newKind
+        useBearerAuth = newKind == .anthropicAPI
     }
 
     var secretAccount: String { id.uuidString }
@@ -255,9 +262,6 @@ nonisolated struct ProviderPreset: Identifiable, Sendable {
     var openAIBase: String? = nil
     /// Anthropic Messages 兼容地址
     var anthropicBase: String? = nil
-    /// Anthropic 端点是否用 Authorization: Bearer（国内兼容端点大多如此）
-    var anthropicBearer = false
-
     var id: String { name }
 
     func baseURL(for kind: ProviderKind) -> String? {
@@ -265,8 +269,7 @@ nonisolated struct ProviderPreset: Identifiable, Sendable {
     }
 
     func makeProfile() -> ProviderProfile {
-        ProviderProfile(name: name, kind: kind, baseURL: baseURL(for: kind) ?? "https://",
-                        useBearerAuth: kind == .anthropicAPI && anthropicBearer)
+        ProviderProfile(name: name, kind: kind, baseURL: baseURL(for: kind) ?? "https://")
     }
 
     static let all: [ProviderPreset] = [
@@ -277,11 +280,11 @@ nonisolated struct ProviderPreset: Identifiable, Sendable {
         ProviderPreset(name: "OpenRouter", kind: .openAICompatible,
                        openAIBase: "https://openrouter.ai/api/v1"),
         ProviderPreset(name: "DeepSeek", kind: .openAICompatible,
-                       openAIBase: "https://api.deepseek.com/v1", anthropicBase: "https://api.deepseek.com/anthropic", anthropicBearer: true),
+                       openAIBase: "https://api.deepseek.com/v1", anthropicBase: "https://api.deepseek.com/anthropic"),
         ProviderPreset(name: "智谱 GLM", kind: .anthropicAPI,
-                       openAIBase: "https://open.bigmodel.cn/api/paas/v4", anthropicBase: "https://open.bigmodel.cn/api/anthropic", anthropicBearer: true),
+                       openAIBase: "https://open.bigmodel.cn/api/paas/v4", anthropicBase: "https://open.bigmodel.cn/api/anthropic"),
         ProviderPreset(name: "Kimi（Moonshot）", kind: .openAICompatible,
-                       openAIBase: "https://api.moonshot.cn/v1", anthropicBase: "https://api.moonshot.cn/anthropic", anthropicBearer: true),
+                       openAIBase: "https://api.moonshot.cn/v1", anthropicBase: "https://api.moonshot.cn/anthropic"),
         ProviderPreset(name: "阿里云百炼（通义）", kind: .openAICompatible,
                        openAIBase: "https://dashscope.aliyuncs.com/compatible-mode/v1"),
         ProviderPreset(name: "硅基流动", kind: .openAICompatible,
@@ -294,17 +297,16 @@ nonisolated struct ProviderPreset: Identifiable, Sendable {
     static let custom = ProviderPreset(name: "自定义", kind: .openAICompatible, openAIBase: "https://")
 
     /// 切换接口类型时：如果 Base URL 是某个服务商的已知地址，换成该服务商在新类型下的地址
-    static func switching(baseURL: String, to kind: ProviderKind) -> (url: String, bearer: Bool)? {
+    static func switching(baseURL: String, to kind: ProviderKind) -> String? {
         func norm(_ s: String) -> String {
             var t = s.trimmed
             while t.hasSuffix("/") { t.removeLast() }
             return t.lowercased()
         }
         let current = norm(baseURL)
-        guard let preset = all.first(where: { p in
+        return all.first { p in
             [p.openAIBase, p.anthropicBase].compactMap { $0 }.contains { norm($0) == current }
-        }), let url = preset.baseURL(for: kind) else { return nil }
-        return (url, kind == .anthropicAPI && preset.anthropicBearer)
+        }?.baseURL(for: kind)
     }
 }
 
