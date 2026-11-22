@@ -248,6 +248,8 @@ extension Color {
 
 /// 点阵画布背景
 struct CanvasBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         Canvas { ctx, size in
             let spacing: CGFloat = 22
@@ -262,7 +264,8 @@ struct CanvasBackground: View {
                 y += spacing
             }
         }
-        .background(Color(nsColor: .underPageBackgroundColor))
+        // 对齐 macOS 27 的底色，避免系统背景色随版本变化而改变卡片对比度。
+        .background(colorScheme == .dark ? Color(hex: "#282828") : Color(hex: "#F6F6F6"))
         .ignoresSafeArea()
     }
 }
