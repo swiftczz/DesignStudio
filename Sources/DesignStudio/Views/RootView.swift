@@ -147,6 +147,7 @@ struct SidebarView: View {
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
+            .scrollEdgeEffectStyle(.soft, for: .bottom)
             .backgroundPreferenceValue(ProjectRowBounds.self) { rows in
                 projectDragBackground(rows)
             }
@@ -166,9 +167,8 @@ struct SidebarView: View {
                 return .handled
             }
         }
-        .safeAreaInset(edge: .bottom) {
+        .safeAreaBar(edge: .bottom) {
             SidebarFooter()
-                .background(.regularMaterial, ignoresSafeAreaEdges: .bottom)
         }
         .alert("重命名项目", isPresented: Binding(get: { renamingID != nil }, set: { if !$0 { renamingID = nil } })) {
             TextField("名称", text: $renameText)
