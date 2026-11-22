@@ -577,7 +577,7 @@ private struct VersionChip: View {
             }
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: "rectangle.on.rectangle")
+                Image(systemName: "rectangle.dashed")
                     .font(.system(size: 15))
                     .foregroundStyle(.secondary)
                     .frame(width: 30, height: 30)

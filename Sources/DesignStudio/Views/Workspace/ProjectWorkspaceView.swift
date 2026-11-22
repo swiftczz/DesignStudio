@@ -112,12 +112,12 @@ struct ProjectWorkspaceView: View {
 
         if session.showCanvas {
             ToolbarItem(placement: .primaryAction) {
-                toolbarCapsule {
+                toolbarCircle {
                     ExportMenu(session: session) { batchExport = $0 }
                         .menuStyle(.borderlessButton)
                         .menuIndicator(.hidden)
                         .scaleEffect(1.14)
-                        // 导出图标的视觉重心偏低，微调图标位置，胶囊仍保持居中。
+                        // 导出图标的视觉重心偏低，微调图标位置。
                         .offset(y: -2)
                         .frame(width: 26, height: 26)
                 }
@@ -128,7 +128,7 @@ struct ProjectWorkspaceView: View {
         }
 
         ToolbarItem(placement: .primaryAction) {
-            toolbarCapsule {
+            toolbarCircle {
                 VersionHistoryButton(session: session) { comparedVersion = $0 }
                     .buttonStyle(.borderless)
             }
@@ -139,11 +139,11 @@ struct ProjectWorkspaceView: View {
 
         ToolbarItem(placement: .primaryAction) {
             let label: LocalizedStringKey = session.showCanvas ? "隐藏画布" : "打开画布"
-            toolbarCapsule {
+            toolbarCircle {
                 Button {
                     session.showCanvas.toggle()
                 } label: {
-                    Label(label, systemImage: "rectangle.on.rectangle")
+                    Label(label, systemImage: "rectangle.dashed")
                         .labelStyle(.iconOnly)
                         .font(.system(size: 15))
                         .frame(width: 26, height: 26)
@@ -169,14 +169,13 @@ struct ProjectWorkspaceView: View {
         }
     }
 
-    private func toolbarCapsule<Content: View>(content: () -> Content) -> some View {
+    private func toolbarCircle<Content: View>(content: () -> Content) -> some View {
         content()
             .font(.system(size: 16))
             .tint(.primary)
-            .padding(.horizontal, 6)
-            .frame(height: 34)
+            .frame(width: 36, height: 36)
             .fixedSize()
-            .glassEffect(.regular, in: .capsule)
+            .glassEffect(.regular, in: .circle)
     }
 }
 

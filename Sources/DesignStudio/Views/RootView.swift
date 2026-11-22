@@ -168,6 +168,7 @@ struct SidebarView: View {
         }
         .safeAreaInset(edge: .bottom) {
             SidebarFooter()
+                .background(.regularMaterial, ignoresSafeAreaEdges: .bottom)
         }
         .alert("重命名项目", isPresented: Binding(get: { renamingID != nil }, set: { if !$0 { renamingID = nil } })) {
             TextField("名称", text: $renameText)
