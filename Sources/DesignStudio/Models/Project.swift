@@ -168,6 +168,10 @@ nonisolated struct ChatMessage: Codable, Identifiable, Sendable {
     var scopeIDs: Set<UUID>?
     var requestPageID: UUID?
     var requestPageName: String?
+    var createsCanvasCopy: Bool?
+    var outputPageID: UUID?
+    var outputArtboardIDs: [UUID: UUID]?
+    var completedSourceArtboardIDs: Set<UUID>?
     var scopeArtboardNames: [UUID: String]?
     var generationInProgress: Bool?
     var wasStopped = false
@@ -187,6 +191,7 @@ nonisolated struct GenerationRecovery: Codable, Sendable, Equatable {
     var boardNames: [String?]
     var includesSharedStyles: Bool
     var scopeIDs: Set<UUID>?
+    var identifiesArtboardsByID: Bool?
 }
 
 /// 用户消息针对的修改对象：显示在消息上方，点击可在画布上重新选中

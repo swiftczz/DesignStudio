@@ -207,6 +207,15 @@ struct MessageView: View {
     private var userBubble: some View {
         VStack(alignment: .trailing, spacing: 6) {
             messageScope
+            if let id = message.outputPageID, let page = session.document.pages.first(where: { $0.id == id }) {
+                Button { session.revealCanvas(id) } label: {
+                    Label("输出到 · \(page.displayName)", systemImage: "rectangle.dashed")
+                        .font(.caption)
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
             if !message.attachments.isEmpty {
                 AttachmentThumbs(attachments: message.attachments)
             }
@@ -828,12 +837,13 @@ struct ChatComposer: View {
     private func scopeMenu(_ boards: [Artboard]) -> some View {
         let selected = session.draftScopeArtboards
         let issue = session.draftScopeIssue
-        let title = switch (issue != nil, selected.count) {
+        let scopeTitle = switch (issue != nil, selected.count) {
         case (true, _): "重新选择修改范围"
         case (_, 0): "整个画布"
         case (_, 1): "仅修改：\(selected[0].name)"
         default: "仅修改 \(selected.count) 张画板"
         }
+        let title = session.draftCreatesCanvasCopy && !boards.isEmpty ? scopeTitle + " · 新画布" : scopeTitle
         return Menu {
             Button {
                 session.draftScopeIDs = []
@@ -851,6 +861,9 @@ struct ChatComposer: View {
                     session.showAskAI = true
                 }
             }
+            if !boards.isEmpty {
+                Toggle("输出到新画布", isOn: $session.draftCreatesCanvasCopy)
+            }
             Divider()
             ForEach(boards) { board in
                 Toggle(board.name, isOn: Binding(
@@ -865,7 +878,7 @@ struct ChatComposer: View {
                     }))
             }
         } label: {
-            ComposerChipLabel(idleTint: session.draftScopeIDs.isEmpty ? nil : Theme.accent) {
+            ComposerChipLabel(idleTint: session.draftScopeIDs.isEmpty && !session.draftCreatesCanvasCopy ? nil : Theme.accent) {
                 Image(systemName: "scope").accessibilityHidden(true)
                 Text(title)
             }

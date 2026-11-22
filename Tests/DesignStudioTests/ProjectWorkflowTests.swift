@@ -396,6 +396,57 @@ struct ProjectWorkflowTests {
         #expect(persistence.flush())
     }
 
+    @Test(.timeLimit(.minutes(1)))
+    func canvasCopyBatchesValidateIDsAndRetryOnlyMissingBoards() async throws {
+        let folder = try TempWorkspace.make(prefix: "canvas-batches")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let persistence = PersistenceController(root: folder)
+        let provider = CanvasBatchProvider()
+        let app = AppModel(persistence: persistence) { _ in provider }
+        app.providers = [ProviderProfile(name: "Test", kind: .openAICompatible)]
+        let filler = String(repeating: "<p>Long source for the English layout.</p>", count: 750)
+        let boards = (1...3).map { index in
+            Artboard(name: "同名画板", html: "<h1>源内容 \(index)</h1>" + filler, width: 390, height: 844)
+        }
+        let source = DesignPage(name: "原画布", artboards: boards, sharedCSS: "h1 { color: navy }")
+        var project = Project(name: "批量编辑", kind: .prototype)
+        project.document = DesignDocument(pages: [source])
+        app.projects = [project]
+        let session = app.session(for: project.id)
+        session.draftCreatesCanvasCopy = true
+        session.draft = "翻译所有画板"
+
+        session.send()
+        for await busy in Observations({ session.isPreparingRequest || session.isGenerating }) {
+            if !busy { break }
+        }
+        let failed = try #require(app.project(project.id)?.messages.last)
+        #expect(failed.errorText?.contains("1/3") == true)
+        #expect(failed.versionID == nil)
+        let copy = try #require(session.document.pages.last)
+        #expect(copy.id != source.id)
+        #expect(copy.artboards.map(\.html) == boards.map(\.html))
+        #expect(session.document.page(source.id) == source)
+
+        session.keepCompletedArtboards(message: failed)
+        let checkpoint = try #require(app.project(project.id)?.messages.last)
+        #expect(checkpoint.versionID != nil)
+        #expect(session.document.artboard(copy.artboards[0].id)?.html == "<h1>English revision</h1>")
+        session.retryRemaining(message: checkpoint)
+        for await busy in Observations({ session.isPreparingRequest || session.isGenerating }) {
+            if !busy { break }
+        }
+        let requests = await provider.requests
+        let expected = copy.artboards.map(\.id)
+        #expect(requests == [[expected[0]], [expected[1]], [expected[1]], [expected[2]]])
+        #expect(session.document.pages.count == 2)
+        #expect(session.document.page(source.id) == source)
+        #expect(session.document.page(copy.id)?.artboards.map(\.html) == Array(repeating: "<h1>English revision</h1>", count: 3))
+        #expect(session.document.page(copy.id)?.sharedCSS == source.sharedCSS)
+        #expect(app.project(project.id)?.messages.last?.errorText == nil)
+        #expect(persistence.flush())
+    }
+
     @Test func restoresEachCanvasZoomCenterAndSelectionAfterResizing() throws {
         let folder = try TempWorkspace.make(prefix: "canvas-viewport")
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -522,6 +573,27 @@ struct ProjectWorkflowTests {
         let rendered = try await CanvasExportRenderer.render(first, kind: .prototype, png: true)
         let png = try #require(rendered.png)
         #expect(png.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]))
+    }
+}
+
+private actor CanvasBatchProvider: LLMProvider {
+    private(set) var requests: [[UUID]] = []
+
+    nonisolated func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                continuation.yield(.text(await reply(request)))
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func reply(_ request: LLMRequest) -> String {
+        let ids = ArtboardParser.parse(request.messages.last?.text ?? "").compactMap { $0.name.flatMap(UUID.init(uuidString:)) }
+        requests.append(ids)
+        let returned = requests.count == 2 ? [UUID()] : ids
+        return returned.map { "```html artboard=\"\($0)\"\n<h1>English revision</h1>\n```" }.joined(separator: "\n\n")
     }
 }
 

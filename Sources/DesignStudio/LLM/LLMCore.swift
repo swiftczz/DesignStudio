@@ -17,9 +17,14 @@ nonisolated struct LLMRequest: Sendable {
     var elementEdit = false
     var files: [ChatAttachment] = []
     var titleOnly = false
+    var canvasBatch = false
 
     var replyFormatReminder: String {
         if titleOnly { return "Output only the short project title on one line." }
+        if canvasBatch {
+            return "Return exactly one ```html artboard=\"<assigned ID>\" block per assigned artboard. "
+                + "Use <!-- unchanged --> as its entire content for an artboard that needs no changes. Do not output shared CSS."
+        }
         if elementEdit {
             return "Output one block: ```html element patch for text/style JSON, or ```html element for replacement HTML."
         }
@@ -35,15 +40,15 @@ nonisolated struct LLMRequest: Sendable {
         if includeSystem {
             out += "<instructions>\n\(system)\n</instructions>\n\n"
         }
+        out += messages.last?.text ?? ""
         let history = messages.dropLast()
         if !history.isEmpty {
-            out += "<conversation_history>\n"
+            out += "\n\n<conversation_history>\n"
             for m in history {
                 out += "[\(m.role == .user ? "User" : "Assistant")]\n\(m.text)\n\n"
             }
             out += "</conversation_history>\n\n"
         }
-        out += messages.last?.text ?? ""
         return out
     }
 }

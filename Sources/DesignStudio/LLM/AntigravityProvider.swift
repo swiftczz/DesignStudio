@@ -6,6 +6,8 @@ import Foundation
 /// 登录由 `agy` 首次运行时的 Google 账号登录完成，使用 Google AI 订阅（Antigravity）的额度。
 nonisolated struct AntigravityProvider: LLMProvider {
     let profile: ProviderProfile
+    // Local request budget. The CLI has accepted larger input and silently lost the tail.
+    static let inputBudgetBytes = 96 * 1024
 
     func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMEvent, Error> {
         let profile = profile
@@ -27,6 +29,10 @@ nonisolated struct AntigravityProvider: LLMProvider {
                     prompt += "\n\nIMPORTANT: Do not run commands and do not create or edit files. "
                         + "Reply directly in this message, following the output contract in <instructions>: "
                     prompt += request.replyFormatReminder
+                    let input = Self.inputLine(prompt)
+                    guard input.utf8.count <= Self.inputBudgetBytes else {
+                        throw LLMError.invalidResponse("Antigravity 请求超过应用的传输预算，请减少参考资料或缩小修改范围。")
+                    }
 
                     var args = ["--input-format", "stream-json", "--output-format", "stream-json"]
                     if !profile.model.trimmed.isEmpty { args += ["--model", profile.model.trimmed] }
@@ -41,7 +47,7 @@ nonisolated struct AntigravityProvider: LLMProvider {
                     continuation.yield(.status("正在启动 Antigravity…"))
 
                     for try await line in CLIRunner.stream(profile.cliExecutable, args,
-                                                           stdin: Self.inputLine(prompt), cwd: workdir) {
+                                                           stdin: input, cwd: workdir) {
                         switch line {
                         case .stderr(let s):
                             stderr += s + "\n"

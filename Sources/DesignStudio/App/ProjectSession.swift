@@ -107,6 +107,7 @@ final class ProjectSession {
     var streamingMessageID: UUID?
     var status: String?
     var draftScopeIDs: Set<UUID> = []
+    var draftCreatesCanvasCopy = false
     var chatFocusRequest = UUID()
     private(set) var chatSendScrollRequest = UUID()
     private(set) var isPreparingRequest = false
@@ -130,6 +131,7 @@ final class ProjectSession {
     @ObservationIgnored private var generationTiming = GenerationTiming(total: 0)
     @ObservationIgnored private var generationScope: Set<String>?
     @ObservationIgnored private var generationScopeIDs: Set<UUID>?
+    @ObservationIgnored private var generationIdentifiesArtboardsByID = false
     @ObservationIgnored private var checkpoint: GenerationRecovery?
     @ObservationIgnored private var pendingFirstArtboard: (messageID: UUID, started: ContinuousClock.Instant, boards: Set<UUID>)?
     @ObservationIgnored private var preservedBoards: Set<String> = []
@@ -1398,6 +1400,7 @@ final class ProjectSession {
         )
         userMessage.scopeIDs = useSelection || draftScopeIDs.isEmpty ? nil : draftScopeIDs
         userMessage.requestPageID = currentPageID
+        if !useSelection, draftCreatesCanvasCopy { userMessage.createsCanvasCopy = true }
         submit(userMessage, selection: useSelection ? askTargetSelection : nil, fromAskBar: useSelection)
     }
 
@@ -1415,6 +1418,9 @@ final class ProjectSession {
         message.id = UUID()
         message.createdAt = Date()
         message.text = Self.submissionText(text, hasComments: !message.comments.isEmpty)
+        message.outputPageID = nil
+        message.outputArtboardIDs = nil
+        message.completedSourceArtboardIDs = nil
         submit(message) {
             self.chatSendScrollRequest = UUID()
             onSubmitted()
@@ -1423,6 +1429,7 @@ final class ProjectSession {
 
     private func submit(_ message: ChatMessage, selection selected: CanvasSelection? = nil,
                         fromAskBar: Bool? = nil, replacingReply: UUID? = nil, preserving: Set<String> = [],
+                        skipping finished: Set<UUID> = [],
                         onSubmitted: (() -> Void)? = nil) {
         guard !isGenerating, !isPreparingRequest, project != nil else { return }
         guard let profile = provider else {
@@ -1519,42 +1526,79 @@ final class ProjectSession {
                 snapshot.messages.removeSubrange((index - 1)...index)
             }
             snapshot.document = document
-            let request = DesignPrompt.makeRequest(
-                project: snapshot,
-                designSystem: app.designSystem(for: snapshot.designSystemID),
-                newMessage: user,
-                profile: profile,
-                pageID: pageID,
-                selection: context,
-                commentsOnly: user.text == Self.commentsOnlyPrompt && user.attachments.isEmpty,
-                scopeIDs: restricted,
-                preserving: preserving
-            )
+            var newDestination: DesignPage?
+            if user.createsCanvasCopy == true, user.outputPageID == nil, !page.artboards.isEmpty {
+                var copy = page
+                copy.id = UUID()
+                let base = page.displayName + " 副本"
+                var name = base
+                var suffix = 2
+                while document.pages.contains(where: { $0.displayName == name }) {
+                    name = "\(base) \(suffix)"
+                    suffix += 1
+                }
+                copy.name = name
+                for index in copy.artboards.indices { copy.artboards[index].id = UUID() }
+                user.outputPageID = copy.id
+                user.outputArtboardIDs = Dictionary(uniqueKeysWithValues: zip(page.artboards.map(\.id), copy.artboards.map(\.id)))
+                newDestination = copy
+            }
+            let outputPageID = user.outputPageID ?? page.id
+            guard let outputPage = newDestination ?? document.pages.first(where: { $0.id == outputPageID }) else {
+                requestNotice = "输出画布已不存在，请编辑原消息并重新发送。"
+                return
+            }
+            let plan: DesignRequestPlan
+            do {
+                plan = try DesignRequestPlan.make(project: snapshot,
+                    designSystem: app.designSystem(for: snapshot.designSystemID), message: user,
+                    profile: profile, page: page, selection: context,
+                    commentsOnly: user.text == Self.commentsOnlyPrompt && user.attachments.isEmpty,
+                    scope: restricted, preserving: preserving, skipping: finished, destinationIDs: user.outputArtboardIDs)
+                if let ids = plan.artboardIDs, !ids.isSubset(of: Set(outputPage.artboards.map(\.id))) {
+                    throw LLMError.invalidResponse("输出画板已不存在，请编辑原消息并重新发送。")
+                }
+            } catch {
+                requestNotice = error.localizedDescription
+                return
+            }
+            if let copy = newDestination { commit { $0.pages.append(copy) } }
+            if user.outputPageID != nil { switchPage(outputPageID) }
             if fromAskBar == true, askDraft == originalDraft { askDraft = "" }
             if fromAskBar == false {
+                if user.createsCanvasCopy == true {
+                    draftCreatesCanvasCopy = false
+                    if let ids = user.outputArtboardIDs {
+                        draftScopeIDs = Set(draftScopeIDs.compactMap { ids[$0] })
+                    }
+                }
                 if draft == originalDraft { draft = "" }
                 if draftAttachments.map(\.id) == originalAttachments { draftAttachments = [] }
             }
             if fromAskBar != nil { chatSendScrollRequest = UUID() }
-            startGeneration(request: request, user: user, assistant: assistant, profile: profile,
-                            pageID: page.id, target: target?.artboardID, element: request.elementEdit ? elementTarget : nil,
-                            scope: restricted, replacingReply: replacingReply, preserving: preserving, started: started)
+            startGeneration(plan: plan, user: user, assistant: assistant, profile: profile,
+                            pageID: outputPageID, target: target?.artboardID,
+                            element: plan.batches.first?.request.elementEdit == true ? elementTarget : nil,
+                            scope: plan.artboardIDs ?? restricted, replacingReply: replacingReply,
+                            preserving: preserving, started: started)
             onSubmitted?()
         }
     }
 
-    private func startGeneration(request: LLMRequest, user: ChatMessage, assistant: ChatMessage,
+    private func startGeneration(plan: DesignRequestPlan, user: ChatMessage, assistant: ChatMessage,
                                  profile: ProviderProfile, pageID: UUID?, target: UUID?,
                                  element: (selection: CanvasSelection, source: String)?,
                                  scope: Set<UUID>?, replacingReply: UUID?,
                                  preserving: Set<String>, started: ContinuousClock.Instant) {
         generationStartedAt = started
         generationScopeIDs = scope
+        generationIdentifiesArtboardsByID = plan.artboardIDs != nil
         pendingFirstArtboard = nil
         checkpoint = nil
         generationTiming = GenerationTiming(total: 0)
         generationScope = scope.map { ids in
-            Set((document.page(pageID)?.artboards ?? []).filter { ids.contains($0.id) }.map { $0.name.trimmed.lowercased() })
+            if plan.artboardIDs != nil { return Set(ids.map { $0.uuidString.lowercased() }) }
+            return Set((document.page(pageID)?.artboards ?? []).filter { ids.contains($0.id) }.map { $0.name.trimmed.lowercased() })
         }
         preservedBoards = Set(preserving.map { $0.trimmed.lowercased() })
         app.updateProject(projectID) { p in
@@ -1601,15 +1645,63 @@ final class ProjectSession {
 
         task = Task { [weak self] in
             do {
-                for try await event in llm.stream(request) {
-                    guard let self else { return }
-                    self.handle(event)
+                if let ids = plan.artboardIDs {
+                    try await self?.generateBatches(plan.batches, total: ids.count, using: llm)
+                } else if let request = plan.batches.first?.request {
+                    for try await event in llm.stream(request) {
+                        guard let self else { return }
+                        self.handle(event)
+                    }
                 }
                 await self?.finish(messageID: assistant.id, error: nil)
             } catch {
                 await self?.finish(messageID: assistant.id, error: error is CancellationError ? nil : error)
             }
         }
+    }
+
+    private func generateBatches(_ batches: [DesignRequestPlan.Batch], total: Int, using provider: any LLMProvider) async throws {
+        var completed = 0
+        for batch in batches {
+            try Task.checkCancellation()
+            let progress = "正在处理画板 · \(completed)/\(total)"
+            status = progress
+            var response = ""
+            var failure: Error?
+            var usage: (input: Int, output: Int)?
+            do {
+                for try await event in provider.stream(batch.request) {
+                    switch event {
+                    case .text(let text):
+                        if generationTiming.firstText == nil, !text.trimmed.isEmpty {
+                            generationTiming.firstText = generationElapsed
+                        }
+                        response += text
+                    case .usage(let input, let output): usage = (input, output)
+                    case .status(let note): status = "\(progress) · \(note)"
+                    case .thinking(let text): streamingThinking += text
+                    }
+                }
+            } catch {
+                failure = error
+            }
+            if let usage {
+                lastUsage = ((lastUsage?.input ?? 0) + usage.input, (lastUsage?.output ?? 0) + usage.output)
+            }
+            let validated = DesignRequestPlan.validate(response, expected: batch.expectedIDs)
+            completed += validated.completed.count
+            if !validated.markdown.isEmpty {
+                streamingText += "\n\n" + validated.markdown + "\n\n"
+                status = "已完成画板 · \(completed)/\(total)"
+                updateLivePreview()
+            }
+            try Task.checkCancellation()
+            if let failure { throw failure }
+            guard validated.completed == batch.expectedIDs else {
+                throw LLMError.invalidResponse("已完成 \(completed)/\(total) 张画板。模型未返回本批所有画板的完整结果。")
+            }
+        }
+        streamingText = "已处理 \(completed) 张画板。" + streamingText
     }
 
     func stop() {
@@ -1691,7 +1783,8 @@ final class ProjectSession {
         let sharedChanged = shared.map { live.setSharedCSS($0, in: generationPageID) } ?? false
         let changed = parsed.isEmpty ? [] : live.merge(parsed, into: generationPageID, kind: kind,
                                                        fallbackTarget: generationTarget,
-                                                       previewArtboardIDs: generatedPreviewIDs, restrictingTo: generationScopeIDs)
+                                                       previewArtboardIDs: generatedPreviewIDs, restrictingTo: generationScopeIDs,
+                                                       identifyingByID: generationIdentifiesArtboardsByID)
         guard !changed.isEmpty || sharedChanged else { return }
         liveDocument = live
         streamingArtboardIDs.formUnion(changed)
@@ -1719,6 +1812,14 @@ final class ProjectSession {
         let parsed = designOutput.boards
         let eligible = parsed.filter(eligibleOutput)
         let outputs = generationElement == nil ? eligible.filter(\.complete) : []
+        if generationIdentifiesArtboardsByID, error == nil {
+            let ids = Set(document.pages.first(where: { $0.id == generationPageID })?.artboards.map(\.id) ?? [])
+            if let expected = generationScopeIDs, !expected.isSubset(of: ids) {
+                error = LLMError.invalidResponse("输出画布或画板已删除，生成结果未写入项目。")
+            } else if cancelled, !outputs.isEmpty {
+                error = LLMError.invalidResponse("已收到 \(outputs.count) 张画板的完整结果，可以保留后继续。")
+            }
+        }
         if generationElement == nil, error == nil, !cancelled, eligible.contains(where: { !$0.complete }) {
             error = LLMError.invalidResponse("生成在画板完成前结束。")
         }
@@ -1747,7 +1848,8 @@ final class ProjectSession {
             var merged = outputs.count == parsed.count ? (liveDocument ?? document) : document
             if let sharedCSS { merged.setSharedCSS(sharedCSS, in: generationPageID) }
             merged.merge(outputs, into: generationPageID, kind: kind, fallbackTarget: generationTarget,
-                         previewArtboardIDs: generatedPreviewIDs, restrictingTo: generationScopeIDs)
+                         previewArtboardIDs: generatedPreviewIDs, restrictingTo: generationScopeIDs,
+                         identifyingByID: generationIdentifiesArtboardsByID)
             if let page = merged.page(generationPageID), !outputs.isEmpty {
                 let original = Dictionary(uniqueKeysWithValues: (document.page(generationPageID)?.artboards ?? []).map { ($0.id, $0) })
                 changedBoards = page.artboards.filter { board in
@@ -1863,7 +1965,8 @@ final class ProjectSession {
     private func recovery(for boards: [ParsedArtboard], sharedCSS: String?) -> GenerationRecovery? {
         guard let generationPageID, !boards.isEmpty || sharedCSS != nil else { return nil }
         return GenerationRecovery(pageID: generationPageID, targetID: generationTarget, boardNames: boards.map(\.name),
-                                  includesSharedStyles: sharedCSS != nil, scopeIDs: generationScopeIDs)
+                                  includesSharedStyles: sharedCSS != nil, scopeIDs: generationScopeIDs,
+                                  identifiesArtboardsByID: generationIdentifiesArtboardsByID ? true : nil)
     }
 
     private func commentTargets(_ comment: CanvasComment, board: Artboard) -> Bool {
@@ -1890,7 +1993,7 @@ final class ProjectSession {
         var merged = document
         if let css { merged.setSharedCSS(css, in: recovery.pageID) }
         let ids = merged.merge(boards, into: recovery.pageID, kind: kind, fallbackTarget: recovery.targetID,
-                               restrictingTo: recovery.scopeIDs)
+                               restrictingTo: recovery.scopeIDs, identifyingByID: recovery.identifiesArtboardsByID == true)
         let changed = ids.compactMap { merged.artboard($0) }
         commit { $0 = merged }
         let next = (project?.versions.map(\.number).max() ?? 0) + 1
@@ -1914,10 +2017,20 @@ final class ProjectSession {
         var original = project.messages[index - 1]
         original.id = UUID()
         original.createdAt = Date()
-        original.requestPageID = recovery.pageID
-        original.text = "继续完成上次未完成的部分。原需求：\n" + original.text
         let pendingIDs = Set(pendingComments.map(\.id))
         original.comments = original.comments.filter { pendingIDs.contains($0.id) }
+        if recovery.identifiesArtboardsByID == true {
+            let completed = Set(recovery.boardNames.compactMap { $0.flatMap(UUID.init(uuidString:)) })
+            let finished = original.outputArtboardIDs.map { ids in
+                Set(ids.compactMap { completed.contains($0.value) ? $0.key : nil })
+            } ?? completed
+            let prior = original.completedSourceArtboardIDs ?? []
+            original.completedSourceArtboardIDs = prior.union(finished)
+            submit(original, skipping: prior.union(finished))
+            return
+        }
+        original.text = "继续完成上次未完成的部分。原需求：\n" + original.text
+        original.requestPageID = recovery.pageID
         let retainedVersion = project.versions.first { $0.id == message.versionID }
         let retainedBoards = retainedVersion?.document?.page(recovery.pageID)?.artboards ?? []
         let names = Set(recovery.boardNames.compactMap { $0 })
@@ -1930,7 +2043,8 @@ final class ProjectSession {
         guard !isGenerating, let project,
               let ai = project.messages.firstIndex(where: { $0.id == assistantMessageID }),
               ai > 0, project.messages[ai - 1].role == .user else { return }
-        submit(project.messages[ai - 1], replacingReply: assistantMessageID)
+        let original = project.messages[ai - 1]
+        submit(original, replacingReply: assistantMessageID, skipping: original.completedSourceArtboardIDs ?? [])
     }
 
     func fixError(in artboardID: UUID) {

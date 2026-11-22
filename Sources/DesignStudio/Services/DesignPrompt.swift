@@ -120,7 +120,8 @@ nonisolated enum DesignPrompt {
                             newMessage: ChatMessage, profile: ProviderProfile,
                             pageID: UUID? = nil, selection: SelectionContext? = nil,
                             commentsOnly: Bool = false, scopeIDs: Set<UUID>? = nil,
-                            preserving boardNames: Set<String> = []) -> LLMRequest {
+                            preserving boardNames: Set<String> = [],
+                            batchTargets: [UUID: UUID]? = nil) -> LLMRequest {
         let limits = profile.limits
         let page = project.workingDocument.page(pageID)
         let artboards = page?.artboards ?? []
@@ -140,17 +141,39 @@ nonisolated enum DesignPrompt {
             !$0.name.trimmed.isEmpty && instructions.localizedCaseInsensitiveContains($0.name.trimmed)
         } : []
         let targetIDs = scopeIDs ?? Set(([selectedBoard].compactMap { $0 } + commentBoards + mentioned).map(\.id))
-        let included = scoped ? artboards.filter { targetIDs.contains($0.id) } : artboards
+        let included = batchTargets.map { targets in artboards.filter { targets[$0.id] != nil } }
+            ?? (scoped ? artboards.filter { targetIDs.contains($0.id) } : artboards)
         let elementEdit = selection?.elementEdit == true && !(selection?.elementHTML ?? "").isEmpty
             && selectedBoard != nil && included.count == 1
-        let allowsSharedStyles = scopeIDs == nil && boardNames.isEmpty && !elementEdit
+        let allowsSharedStyles = scopeIDs == nil && boardNames.isEmpty && !elementEdit && batchTargets == nil
         var systemText = system(kind: project.kind, designSystem: designSystem, allowsSharedStyles: allowsSharedStyles)
         if project.needsTitleSummary {
             systemText += "\n\n## Project title\n" + ProjectTitle.replyInstruction
         }
 
         // 1. 本轮消息：明确指定范围时只附相关源码
-        var current = ""
+        var current = artboards.isEmpty ? "## 设计需求\n" : "## 本轮修改要求\n"
+        current += newMessage.text + "\n\n"
+        if let batchTargets {
+            current += "## 本批画板\n只处理以下画板。对每个 ID 恰好输出一个 ```html artboard=\"ID\" 代码块。"
+                + "返回完整 HTML；无需修改的画板用 <!-- unchanged --> 作为代码块的全部内容。"
+                + "由 DesignStudio 管理结果写入的画布。沿用现有共用样式，不输出共用 CSS，不新增画板。\n"
+            for board in included {
+                if let id = batchTargets[board.id] { current += "- \(id.uuidString)：\(board.name)\n" }
+            }
+            current += "\n"
+        }
+        let comments = batchTargets.map { targets in
+            newMessage.comments.filter { comment in
+                if let id = comment.artboardID { return targets[id] != nil }
+                return comment.artboardName.map { name in included.contains { $0.name == name } } ?? true
+            }
+        } ?? newMessage.comments
+        if !comments.isEmpty {
+            current += "## 画布上的元素批注\n"
+            for (i, c) in comments.enumerated() { current += "\(i + 1). \(c.promptLine)\n" }
+            current += "\n"
+        }
         if elementEdit, let selection, let board = selectedBoard {
             current += "## 选中的元素\n用户在画板「\(board.name)」中选中了 \(selection.elementDescription ?? "一个元素")。"
             current += "本轮只修改这个元素，下面是它当前的完整 HTML：\n"
@@ -187,7 +210,8 @@ nonisolated enum DesignPrompt {
                     current += "画板「\(a.name)」使用以下独立样式（空样式表示没有共用样式）。"
                         + "应用会加载它，画板局部修改写入自己的 HTML：\n```css\n\(override)\n```\n"
                 }
-                current += "```html artboard=\"\(a.name)\" width=\(Int(a.width)) height=\(a.autoHeight == true ? "auto" : String(Int(a.height)))\n\(a.html)\n```\n\n"
+                let name = batchTargets?[a.id]?.uuidString ?? a.name
+                current += "```html artboard=\"\(name)\" width=\(Int(a.width)) height=\(a.autoHeight == true ? "auto" : String(Int(a.height)))\n\(a.html)\n```\n\n"
             }
             let others = artboards.filter { !targetIDs.contains($0.id) }
             if scoped, !others.isEmpty {
@@ -204,21 +228,12 @@ nonisolated enum DesignPrompt {
             }
             current += "\n"
         }
-        if scopeIDs != nil {
+        if scopeIDs != nil, batchTargets == nil {
             current += "\n本轮只修改指定画板：\(included.map(\.name).joined(separator: "、"))。保留其他画板与共用样式。\n"
         }
         if !boardNames.isEmpty {
             current += "\n已保留这些画板：\(boardNames.sorted().joined(separator: "、"))。从上一次未完成的位置继续，不输出这些画板。\n"
         }
-        if !newMessage.comments.isEmpty {
-            current += "## 画布上的元素批注\n"
-            for (i, c) in newMessage.comments.enumerated() {
-                current += "\(i + 1). \(c.promptLine)\n"
-            }
-            current += "\n"
-        }
-        current += artboards.isEmpty ? "## 设计需求\n" : "## 本轮修改要求\n"
-        current += newMessage.text
         current += referenceDocuments(newMessage.attachments)
         let files = newMessage.attachments.filter { !$0.isImage && $0.documentText == nil }
         if !profile.kind.isCLI, !files.isEmpty, let names = try? JSONEncoder().encode(files.map(\.filename)) {
@@ -226,7 +241,10 @@ nonisolated enum DesignPrompt {
                 + String(decoding: names, as: UTF8.self)
         }
         // 放在消息末尾的格式提醒：对指令遵循较弱、或被其他末尾指令干扰的模型更稳
-        if elementEdit {
+        if batchTargets != nil {
+            current += "\n\n（输出格式提醒：为本批每个画板 ID 返回一个完整的 HTML 代码块。"
+                + "无需修改时，在该代码块中只写 <!-- unchanged -->。）"
+        } else if elementEdit {
             current += "\n\n（输出格式提醒：只输出一个元素修改代码块。文字或样式用 ```html element patch，"
                 + "改结构或子元素用 ```html element。）"
         } else {
@@ -255,30 +273,17 @@ nonisolated enum DesignPrompt {
                 return LLMMessage(role: .user, text: userText(m))
             }
 
-        // 3. 按模型的上下文上限尽量多带历史；上限未知时保留最近 16 条
-        let history: [LLMMessage]
-        if let context = limits.contextWindow {
-            let reservedOutput = limits.maxOutput ?? min(32_000, context / 4)
-            var budget = Int(Double(context) * 0.9) - reservedOutput
-                - estimateTokens(systemText) - estimateTokens(latest)
-            var kept: [LLMMessage] = []
-            for m in past.reversed() {
-                budget -= estimateTokens(m)
-                if budget < 0 { break }
-                kept.append(m)
-            }
-            history = kept.reversed()
-        } else {
-            history = Array(past.suffix(16))
-        }
+        // DesignRequestPlan reserves space for the current request before retaining history.
+        let history = limits.contextWindow == nil ? Array(past.suffix(16)) : past
 
         return LLMRequest(
             system: systemText,
-            messages: normalize(history + [latest]),
+            messages: normalize(history) + [latest],
             // 输出用模型上限；未知时不传，由服务商按模型最大值处理
             maxTokens: limits.maxOutput,
             elementEdit: elementEdit,
-            files: profile.kind.isCLI ? files : []
+            files: profile.kind.isCLI ? files : [],
+            canvasBatch: batchTargets != nil
         )
     }
 

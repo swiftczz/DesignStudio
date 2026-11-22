@@ -221,9 +221,11 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
     @discardableResult
     mutating func merge(_ outputs: [ParsedArtboard], into pageID: UUID?, kind: ProjectKind,
                         fallbackTarget: UUID? = nil, previewArtboardIDs: Set<UUID> = [],
-                        restrictingTo scopeIDs: Set<UUID>? = nil) -> [UUID] {
+                        restrictingTo scopeIDs: Set<UUID>? = nil, identifyingByID: Bool = false) -> [UUID] {
         guard !outputs.isEmpty else { return [] }
-        let pageIndex = pageID.flatMap { id in pages.firstIndex { $0.id == id } } ?? 0
+        let requestedPageIndex = pageID.flatMap { id in pages.firstIndex { $0.id == id } }
+        if identifyingByID, requestedPageIndex == nil { return [] }
+        let pageIndex = requestedPageIndex ?? 0
         let previous = pages[pageIndex]
         var page = previous
         var changed: [UUID] = []
@@ -235,7 +237,11 @@ nonisolated struct DesignDocument: Codable, Hashable, Sendable {
             guard !html.isEmpty else { continue }
             // 1. 按名字匹配；2. 没有名字时：唯一输出 + 指定目标 / 页面只有一个画板 → 替换它
             var target: Int?
-            if let name = out.name, let i = page.artboards.firstIndex(where: {
+            if identifyingByID {
+                guard html != DesignRequestPlan.unchanged, let name = out.name, let id = UUID(uuidString: name),
+                      let index = page.artboards.firstIndex(where: { $0.id == id }) else { continue }
+                target = index
+            } else if let name = out.name, let i = page.artboards.firstIndex(where: {
                 (scopeIDs?.contains($0.id) ?? true) && $0.name.trimmed.lowercased() == name.trimmed.lowercased()
             }) {
                 target = i
