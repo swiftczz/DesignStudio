@@ -135,6 +135,8 @@ final class ArtboardHandle {
     weak var webView: WKWebView?
     /// 当前网页加载的源码（干净版本）；与文档中的 html 不同时会重新加载
     var loadedSource: String?
+    // 元素编号在重新加载后会重排，即使画板源码相同。
+    var loadID = UUID()
     var isReady = false
     var isInitialized = false
     var mode: EditorMode = .select
@@ -336,6 +338,7 @@ struct ArtboardWebView: NSViewRepresentable {
 
         func load(_ html: String, in web: WKWebView) {
             cancelPreparation()
+            handle.loadID = UUID()
             handle.loadedSource = html
             handle.isReady = false
             handle.isInitialized = false

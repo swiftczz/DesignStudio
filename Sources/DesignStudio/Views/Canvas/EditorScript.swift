@@ -385,9 +385,15 @@ nonisolated enum EditorScript {
         }
         return +liveRoot.getAttribute(ATTR);
       }
-      function fragment(html, doc){
+      function fragment(html, doc, elementOnly){
         var t = doc.createElement('template');
         t.innerHTML = html.trim();
+        if (elementOnly && (
+          /<(?:!doctype\b|\/?(?:html|head|body)(?=[\s/>]))/i.test(html) ||
+          t.content.childElementCount !== 1 ||
+          Array.prototype.some.call(t.content.childNodes, function(n){ return n.nodeType === 3 && n.textContent.trim(); }) ||
+          t.content.querySelector('base, link, meta, script, style, title')
+        )) return null;
         return t.content.firstElementChild;
       }
 
@@ -898,10 +904,10 @@ nonisolated enum EditorScript {
           selectedId = nid;
           return result(nid, true);
         },
-        replaceOuter: function(id, html){
+        replaceOuter: function(id, html, elementOnly){
           var a = live(id), b = srcEl(id);
-          var na = fragment(html, document), nb = fragment(html, src || document);
-          if (!a || !b || !na || !nb) return result(id, false);
+          var na = fragment(html, document, elementOnly), nb = fragment(html, src || document, elementOnly);
+          if (!a || !b || !na || !nb) return elementOnly ? null : result(id, false);
           var nid = stamp(na, nb);
           a.replaceWith(na); b.replaceWith(nb);
           selectedId = nid;

@@ -468,8 +468,9 @@ struct AskAIBar: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "scope")
-                Text(targetDescription)
+                Text(session.askTargetDescription)
                     .lineLimit(1)
+                    .help(session.askTargetDescription)
                 Spacer()
                 Button {
                     withAnimation(reduceMotion ? nil : WorkspaceMotion.panel) { session.showAskAI = false }
@@ -504,17 +505,6 @@ struct AskAIBar: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 18))
         .onAppear { focused = true }
         .onExitCommand { session.showAskAI = false }
-    }
-
-    private var targetDescription: String {
-        guard let sel = session.askTargetSelection else {
-            return "未选中内容：AI 会根据描述修改当前画布"
-        }
-        guard let board = session.document.artboard(sel.artboardID) else { return "原目标画板已删除" }
-        if sel.elementID != nil, sel == session.selection, let p = session.selectedProps {
-            return "修改「\(board.name)」中的\(ElementKind.title(p.kind)) \(ProjectSession.displayName(p))"
-        }
-        return "修改画板「\(board.name)」"
     }
 
     private var placeholder: String {

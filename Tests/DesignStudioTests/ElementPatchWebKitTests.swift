@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Observation
 import Testing
 import WebKit
 @testable import DesignStudio
@@ -87,6 +88,150 @@ struct ElementPatchWebKitTests {
                     document.querySelector('#group > span').textContent === 'Keep'];
             """, arguments: ["source": html], in: nil, contentWorld: .page)
         #expect(result as? [Bool] == [true, true, true, true, true])
+    }
+
+    @MainActor @Test(.timeLimit(.minutes(1)), arguments: [
+        ("html element patch", #"{"text":"Updated text","style":{"color":"red"}}"#, false, true),
+        ("html element", #"<p id="target">Updated text</p>"#, false, true),
+        ("html artboard=\"首页\" width=390 height=844", "<p>Whole board</p>", false, false),
+        ("html element", "<!doctype html><html><body><p>Whole page</p></body></html>", false, false),
+        ("html element", "<p>Replacement</p><style>body{color:red}</style>", false, false),
+        ("html element patch", #"{"text":"Wrong after reload"}"#, true, false)
+    ])
+    func canvasAskUsesTheLiveSelectionAndWritesOnlyToTheSentElement(
+        info: String, content: String, reload: Bool, applies: Bool
+    ) async throws {
+        let folder = try TempWorkspace.make(prefix: "ask-element")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let persistence = PersistenceController(root: folder)
+        let (requests, requestSink) = AsyncStream<LLMRequest>.makeStream()
+        let (reply, replySink) = AsyncThrowingStream<LLMEvent, Error>.makeStream()
+        defer { requestSink.finish(); replySink.finish() }
+        let app = AppModel(persistence: persistence) { _ in
+            ElementReplyProvider(requests: requestSink, reply: reply)
+        }
+        app.providers = [ProviderProfile(name: "Test", kind: .openAICompatible)]
+        let html = """
+        <!DOCTYPE html><html><head><title>Keep heading</title></head>
+        <body><main><p id="other">Keep sibling</p><p id="target" data-name="目标文本">Original text</p></main></body></html>
+        """
+        let board = Artboard(name: "首页", html: html, width: 390, height: 844)
+        let another = Artboard(name: "设置", html: "<p>Keep another artboard</p>", width: 390, height: 844)
+        var project = Project(name: "询问 AI", kind: .prototype)
+        project.document = DesignDocument(pages: [DesignPage(name: "画布", artboards: [board, another], sharedCSS: "p { margin: 4px }")])
+        app.projects = [project]
+        let session = app.session(for: project.id)
+        let (selections, selectionSink) = AsyncStream<ElementProps>.makeStream()
+        defer { selectionSink.finish() }
+        let configuration = WKWebViewConfiguration()
+        let handler = SelectionMessageHandler { message in
+            session.handleEditorMessage(message, from: board.id)
+            if let props = message.props { selectionSink.yield(props) }
+        }
+        configuration.userContentController.add(handler, name: "ds")
+        defer { configuration.userContentController.removeScriptMessageHandler(forName: "ds") }
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: configuration)
+        let navigation = NavigationWaiter()
+        web.navigationDelegate = navigation
+        let annotated = HTMLAnnotator.annotate(html).html
+        await withCheckedContinuation { continuation in
+            navigation.loaded = continuation
+            web.loadHTMLString(annotated, baseURL: nil)
+        }
+        _ = try await web.evaluateJavaScript(EditorScript.editor)
+        _ = try await web.callAsyncJavaScript("return window.__ds.init(source, 'select');",
+                                             arguments: ["source": annotated], in: nil, contentWorld: .page)
+        let handle = session.handle(for: board.id)
+        handle.webView = web
+        handle.loadedSource = html
+        handle.isReady = true
+        handle.isInitialized = true
+        func click(_ selector: String) async throws {
+            _ = try await web.callAsyncJavaScript("""
+                const node = document.querySelector(selector);
+                for (const type of ['pointerdown', 'pointerup']) {
+                    node.dispatchEvent(new PointerEvent(type, { bubbles: true, button: 0 }));
+                }
+                """, arguments: ["selector": selector], in: nil, contentWorld: .page)
+        }
+        var selected = selections.makeAsyncIterator()
+        var sent = requests.makeAsyncIterator()
+
+        session.showAskAI = true
+        #expect(session.askTargetDescription.contains("未选中"))
+        try await click("#other")
+        let first = await selected.next()
+        #expect(first?.selector == "#other")
+        #expect(session.askTargetDescription.contains("Keep sibling"))
+        try await click("#target")
+        let second = await selected.next()
+        let target = try #require(second)
+        #expect(session.selection?.elementID == target.id)
+        #expect(session.askTargetDescription.contains("目标文本"))
+        session.askDraft = "只修改选中的段落"
+        #expect(session.canAsk)
+        session.send(useSelection: true)
+        for await preparing in Observations({ session.isPreparingRequest }) {
+            if !preparing { break }
+        }
+        try #require(session.isGenerating)
+        let next = await sent.next()
+        let request = try #require(next)
+        #expect(request.elementEdit)
+        #expect(request.messages.last?.text.contains("Original text") == true)
+        #expect(request.messages.last?.text.contains("Keep sibling") == false)
+        #expect(request.messages.last?.text.contains("Keep another artboard") == false)
+        #expect(session.project?.messages.first?.target?.selector == "#target")
+
+        try await click("#other")
+        let latest = await selected.next()
+        #expect(latest?.selector == "#other")
+        if reload { handle.loadID = UUID() }
+        replySink.yield(.text("```\(info)\n\(content)\n```"))
+        replySink.finish()
+        for await generating in Observations({ session.isGenerating }) {
+            if !generating { break }
+        }
+
+        let result = try #require(session.document.artboard(board.id))
+        #expect(result.html.contains(#"<p id="other">Keep sibling</p>"#))
+        #expect(result.html.contains("<title>Keep heading</title>"))
+        #expect(session.document.artboard(another.id) == another)
+        #expect(session.document.sharedCSS(for: board.id) == "p { margin: 4px }")
+        if applies {
+            #expect(result.html.contains("Updated text"))
+            #expect(!result.html.contains("Original text"))
+            #expect(session.project?.messages.last?.versionID != nil)
+            #expect(session.project?.messages.last?.errorText == nil)
+        } else {
+            #expect(result.html == html)
+            #expect(session.project?.messages.last?.versionID == nil)
+            #expect(session.project?.messages.last?.errorText != nil)
+        }
+        #expect(persistence.flush())
+    }
+
+    private struct ElementReplyProvider: LLMProvider {
+        let requests: AsyncStream<LLMRequest>.Continuation
+        let reply: AsyncThrowingStream<LLMEvent, Error>
+
+        nonisolated func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMEvent, Error> {
+            requests.yield(request)
+            return reply
+        }
+    }
+
+    @MainActor private final class SelectionMessageHandler: NSObject, WKScriptMessageHandler {
+        let receive: (EditorMessage) -> Void
+
+        init(_ receive: @escaping (EditorMessage) -> Void) { self.receive = receive }
+
+        func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard let json = message.body as? String,
+                  let event = try? JSONDecoder().decode(EditorMessage.self, from: Data(json.utf8)),
+                  event.type == "select" else { return }
+            receive(event)
+        }
     }
 
     @MainActor @Test func canvasZoomPreservesResponsiveLayoutAndScalesElementCoordinates() async throws {
