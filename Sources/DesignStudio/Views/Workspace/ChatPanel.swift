@@ -186,6 +186,11 @@ struct MessageView: View {
     @State private var hovering = false
     @State private var copied = false
     @State private var appeared = false
+    @State private var isEditing = false
+    @State private var editedText = ""
+    @State private var editSelection: TextSelection?
+    @State private var isPlacingEditCaret = false
+    @FocusState private var editFocused: Bool
 
     var body: some View {
         if message.role == .user {
@@ -215,12 +220,73 @@ struct MessageView: View {
                 .background(Color.primary.opacity(0.05), in: .capsule)
                 .help(c.selector)
             }
-            if !message.text.isEmpty {
-                MarkdownText(message.text, style: .user)
+            if isEditing {
+                messageEditor
+            } else {
+                if !message.text.isEmpty {
+                    MarkdownText(message.text, style: .user)
+                }
+                HStack(spacing: 2) {
+                    Button("编辑消息", systemImage: "pencil") {
+                        editedText = message.text
+                        editSelection = nil
+                        isPlacingEditCaret = true
+                        isEditing = true
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(MessageActionButtonStyle())
+                    .help("编辑并重新发送")
+
+                    if !message.text.isEmpty {
+                        copyButton(message.text, title: "复制消息")
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 48)
+    }
+
+    private var messageEditor: some View {
+        VStack(alignment: .trailing, spacing: 8) {
+            TextField("编辑消息", text: $editedText, selection: $editSelection, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 14))
+                .lineLimit(2...8)
+                .focused($editFocused)
+                .onChange(of: editSelection) { _, selection in
+                    guard isPlacingEditCaret, let selection else { return }
+                    isPlacingEditCaret = false
+                    if !selection.isInsertion {
+                        editSelection = TextSelection(insertionPoint: editedText.endIndex)
+                    }
+                }
+                .onSubmit(resend)
+            HStack(spacing: 8) {
+                Button("取消", role: .cancel) { isEditing = false }
+                Button(action: resend) {
+                    Text("重新发送").fontWeight(.semibold)
+                }
+                .disabled(!canResend)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(10)
+        .composerCard(focused: editFocused, cornerRadius: 14)
+        .disabled(session.isPreparingRequest)
+        .onAppear { editFocused = true }
+        .onExitCommand { if !session.isPreparingRequest { isEditing = false } }
+    }
+
+    private var canResend: Bool {
+        !session.isGenerating && !session.isPreparingRequest
+            && (!editedText.trimmed.isEmpty || !message.attachments.isEmpty || !message.comments.isEmpty)
+    }
+
+    private func resend() {
+        guard canResend else { return }
+        session.resendEditedMessage(id: message.id, text: editedText) { isEditing = false }
     }
 
     @ViewBuilder
@@ -348,20 +414,7 @@ struct MessageView: View {
             if !isStreaming {
                 HStack(spacing: 2) {
                     if !display.isEmpty {
-                        Button {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(display, forType: .string)
-                            withAnimation(reduceMotion ? nil : WorkspaceMotion.hover) { copied = true }
-                            Task {
-                                try? await Task.sleep(for: .seconds(1.5))
-                                withAnimation(reduceMotion ? nil : WorkspaceMotion.hover) { copied = false }
-                            }
-                        } label: {
-                            Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                                .contentTransition(.symbolEffect(.replace))
-                        }
-                        .buttonStyle(MessageActionButtonStyle())
-                        .help(copied ? "已复制" : "复制回复")
+                        copyButton(display, title: "复制回复")
                     }
                     if isLastReply && message.errorText == nil {
                         Button {
@@ -394,9 +447,28 @@ struct MessageView: View {
         }
         .padding(.leading, -5)
     }
+
+    private func copyButton(_ text: String, title: LocalizedStringKey) -> some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            withAnimation(reduceMotion ? nil : WorkspaceMotion.hover) { copied = true }
+        } label: {
+            Label(title, systemImage: copied ? "checkmark" : "doc.on.doc")
+                .labelStyle(.iconOnly)
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(MessageActionButtonStyle())
+        .help(copied ? "已复制" : title)
+        .task(id: copied) {
+            guard copied else { return }
+            do { try await Task.sleep(for: .seconds(1.5)) } catch { return }
+            withAnimation(reduceMotion ? nil : WorkspaceMotion.hover) { copied = false }
+        }
+    }
 }
 
-/// 回复下方的小图标按钮：灰色图标，悬停时出现浅灰底
+/// 消息下方的小图标按钮：灰色图标，悬停时出现浅灰底
 private struct MessageActionButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         ActionBody(configuration: configuration)

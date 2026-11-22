@@ -1372,6 +1372,11 @@ final class ProjectSession {
 
     private static let commentsOnlyPrompt = "请根据画布批注修改设计。"
 
+    private static func submissionText(_ text: String, hasComments: Bool) -> String {
+        if !text.isEmpty { return text }
+        return hasComments ? commentsOnlyPrompt : "请参考附件设计。"
+    }
+
     /// - Parameter useSelection: 来自画布上的「询问 AI」：把选中的画板 / 元素作为修改目标；
     ///   选中的是元素时，AI 只返回这个元素，生成后直接替换
     func send(useSelection: Bool = false) {
@@ -1387,7 +1392,7 @@ final class ProjectSession {
         }
         var userMessage = ChatMessage(
             role: .user,
-            text: text.isEmpty ? (comments.isEmpty ? "请参考附件设计。" : Self.commentsOnlyPrompt) : text,
+            text: Self.submissionText(text, hasComments: !comments.isEmpty),
             attachments: attachments,
             comments: comments
         )
@@ -1396,8 +1401,29 @@ final class ProjectSession {
         submit(userMessage, selection: useSelection ? askTargetSelection : nil, fromAskBar: useSelection)
     }
 
+    func resendEditedMessage(id: UUID, text: String, onSubmitted: @escaping () -> Void) {
+        guard !isGenerating, !isPreparingRequest,
+              var message = project?.messages.first(where: { $0.id == id && $0.role == .user }) else { return }
+        let text = text.trimmed
+        guard !text.isEmpty || !message.attachments.isEmpty || !message.comments.isEmpty else { return }
+        do {
+            message.attachments = try AttachmentImporter.includingPastedDocuments(in: text, attachments: message.attachments)
+        } catch {
+            ExportService.presentError("无法读取参考文件", error)
+            return
+        }
+        message.id = UUID()
+        message.createdAt = Date()
+        message.text = Self.submissionText(text, hasComments: !message.comments.isEmpty)
+        submit(message) {
+            self.chatSendScrollRequest = UUID()
+            onSubmitted()
+        }
+    }
+
     private func submit(_ message: ChatMessage, selection selected: CanvasSelection? = nil,
-                        fromAskBar: Bool? = nil, replacingReply: UUID? = nil, preserving: Set<String> = []) {
+                        fromAskBar: Bool? = nil, replacingReply: UUID? = nil, preserving: Set<String> = [],
+                        onSubmitted: (() -> Void)? = nil) {
         guard !isGenerating, !isPreparingRequest, project != nil else { return }
         guard let profile = provider else {
             requestNotice = "请先在设置中添加模型来源。"
@@ -1513,6 +1539,7 @@ final class ProjectSession {
             startGeneration(request: request, user: user, assistant: assistant, profile: profile,
                             pageID: page.id, target: target?.artboardID, element: request.elementEdit ? elementTarget : nil,
                             scope: restricted, replacingReply: replacingReply, preserving: preserving, started: started)
+            onSubmitted?()
         }
     }
 

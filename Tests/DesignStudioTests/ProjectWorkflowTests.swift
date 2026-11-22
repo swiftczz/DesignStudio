@@ -340,6 +340,62 @@ struct ProjectWorkflowTests {
         #expect(session.draft == "保留我的草稿")
     }
 
+    @Test(.timeLimit(.minutes(1)))
+    func editedMessageResendsWithItsOriginalScopeAndKeepsHistory() async throws {
+        let folder = try TempWorkspace.make(prefix: "edited-message")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let persistence = PersistenceController(root: folder)
+        let app = AppModel(persistence: persistence) { _ in WorkspaceDesignProvider() }
+        app.providers = [ProviderProfile(name: "Test", kind: .codex)]
+        let board = Artboard(name: "今日推荐", html: "<h1>旧版</h1>", width: 390, height: 844)
+        let page = DesignPage(name: "移动端", artboards: [board])
+        let otherPage = DesignPage(name: "桌面")
+        let document = DesignDocument(pages: [page, otherPage])
+        let version = DesignVersion(number: 1, document: document, summary: "旧版")
+        let attachment = ChatAttachment(filename: "需求.md", mimeType: "text/markdown", data: Data("设计需求".utf8))
+        let original = ChatMessage(role: .user, text: "原始需求", attachments: [attachment],
+                                   scopeIDs: [board.id], requestPageID: page.id)
+        let reply = ChatMessage(role: .assistant, text: "旧回复", versionID: version.id)
+        let laterMessage = ChatMessage(role: .user, text: "后续需求")
+        let laterReply = ChatMessage(role: .assistant, text: "后续回复")
+        let history = [original, reply, laterMessage, laterReply]
+        var project = Project(name: "编辑消息", kind: .prototype)
+        project.document = document
+        project.versions = [version]
+        project.currentVersionID = version.id
+        project.messages = history
+        app.projects = [project]
+        let session = app.session(for: project.id)
+        session.switchPage(otherPage.id)
+        session.draft = "未发送的草稿"
+        let scrollRequest = session.chatSendScrollRequest
+        var didSubmit = false
+
+        session.resendEditedMessage(id: original.id, text: "调整今日推荐") { didSubmit = true }
+        let busy = Observations { session.isPreparingRequest || session.isGenerating }
+        for await isBusy in busy {
+            if !isBusy { break }
+        }
+
+        let saved = try #require(app.project(project.id))
+        let edited = try #require(saved.messages.dropFirst(history.count).first)
+        #expect(didSubmit)
+        #expect(session.chatSendScrollRequest != scrollRequest)
+        #expect(session.draft == "未发送的草稿")
+        #expect(saved.messages.prefix(history.count).map(\.id) == history.map(\.id))
+        #expect(saved.messages.first?.text == original.text)
+        #expect(saved.messages.count == 6)
+        #expect(edited.text == "调整今日推荐")
+        #expect(edited.attachments == [attachment])
+        #expect(edited.requestPageID == page.id)
+        #expect(edited.scopeIDs == [board.id])
+        #expect(saved.versions.map(\.number) == [1, 2])
+        #expect(saved.versions.first?.document?.artboard(board.id)?.html == board.html)
+        #expect(session.document.artboard(board.id)?.html.contains("<h1>今日推荐</h1>") == true)
+        #expect(session.document.page(otherPage.id)?.artboards.isEmpty == true)
+        #expect(persistence.flush())
+    }
+
     @Test func restoresEachCanvasZoomCenterAndSelectionAfterResizing() throws {
         let folder = try TempWorkspace.make(prefix: "canvas-viewport")
         defer { try? FileManager.default.removeItem(at: folder) }
