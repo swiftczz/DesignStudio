@@ -92,8 +92,10 @@ final class ProjectSession {
 
     // MARK: 生成
     var draft = ""
+    var draftTextBlocks: [PastedTextBlock] = []
     /// 画布上「询问 AI」浮条的输入，与左侧对话框分开
     var askDraft = ""
+    var askTextBlocks: [PastedTextBlock] = []
     /// 形状工具当前画的图形，以及形状选择条是否展开
     var shapeKind: ShapeKind = .rectangle
     var showShapePicker = false
@@ -216,7 +218,8 @@ final class ProjectSession {
 
     var canSend: Bool {
         !isGenerating && !isPreparingRequest && draftScopeIssue == nil
-            && (!draft.trimmed.isEmpty || !draftAttachments.isEmpty || !draftComments.isEmpty)
+            && (!draft.trimmed.isEmpty || draftTextBlocks.contains(where: \.hasText)
+                || !draftAttachments.isEmpty || !draftComments.isEmpty)
     }
 
     var askTargetDescription: String {
@@ -238,7 +241,8 @@ final class ProjectSession {
     }
 
     var canAsk: Bool {
-        !isGenerating && !isPreparingRequest && askScopeIssue == nil && !askDraft.trimmed.isEmpty
+        !isGenerating && !isPreparingRequest && askScopeIssue == nil
+            && (!askDraft.trimmed.isEmpty || askTextBlocks.contains(where: \.hasText))
     }
     /// 右键菜单「询问 AI」：有选中对象且没有在生成
     var canAskAboutSelection: Bool { selection != nil && !isGenerating }
@@ -1396,7 +1400,8 @@ final class ProjectSession {
     ///   选中的是元素时，AI 只返回这个元素，生成后直接替换
     func send(useSelection: Bool = false) {
         guard useSelection ? canAsk : canSend else { return }
-        let text = (useSelection ? askDraft : draft).trimmed
+        let text = PastedTextBlock.message(useSelection ? askDraft : draft,
+                                           blocks: useSelection ? askTextBlocks : draftTextBlocks)
         let comments = useSelection ? [] : draftComments
         let attachments: [ChatAttachment]
         do {
@@ -1457,6 +1462,7 @@ final class ProjectSession {
         }
         let started = ContinuousClock.now
         let originalDraft = fromAskBar == true ? askDraft : draft
+        let originalTextBlocks = fromAskBar == true ? askTextBlocks : draftTextBlocks
         let originalAttachments = draftAttachments.map(\.id)
         let assistant = ChatMessage(role: .assistant, text: "", providerName: "\(profile.name) · \(profile.displayModel)",
                                     generationInProgress: true)
@@ -1587,7 +1593,10 @@ final class ProjectSession {
             }
             if let copy = newDestination { commit { $0.pages.append(copy) } }
             if user.outputPageID != nil { switchPage(outputPageID) }
-            if fromAskBar == true, askDraft == originalDraft { askDraft = "" }
+            if fromAskBar == true {
+                if askDraft == originalDraft { askDraft = "" }
+                askTextBlocks.removeAll { originalTextBlocks.contains($0) }
+            }
             if fromAskBar == false {
                 if user.createsCanvasCopy == true {
                     draftCreatesCanvasCopy = false
@@ -1596,6 +1605,7 @@ final class ProjectSession {
                     }
                 }
                 if draft == originalDraft { draft = "" }
+                draftTextBlocks.removeAll { originalTextBlocks.contains($0) }
                 if draftAttachments.map(\.id) == originalAttachments { draftAttachments = [] }
             }
             if fromAskBar != nil { chatSendScrollRequest = UUID() }
@@ -2074,12 +2084,15 @@ final class ProjectSession {
     }
 
     func fixError(in artboardID: UUID) {
-        guard let err = artboardErrors[artboardID], let board = document.artboard(artboardID) else { return }
-        askDraft = "画板「\(board.name)」运行时报错：\(err)\n请修复这个问题，保持设计不变。"
+        guard !isGenerating, !isPreparingRequest,
+              let err = artboardErrors[artboardID], let board = document.artboard(artboardID) else { return }
+        let message = ChatMessage(role: .user, text: "画板「\(board.name)」运行时报错：\(err)\n请修复这个问题，保持设计不变。",
+                                  requestPageID: currentPageID)
         artboardErrors[artboardID] = nil
         showAskAI = false
-        select(CanvasSelection(artboardID: artboardID, elementID: nil))
-        send(useSelection: true)
+        let target = CanvasSelection(artboardID: artboardID, elementID: nil)
+        select(target)
+        submit(message, selection: target) { self.chatSendScrollRequest = UUID() }
     }
 
     // MARK: - 批注

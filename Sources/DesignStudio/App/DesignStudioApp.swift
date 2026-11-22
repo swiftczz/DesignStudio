@@ -71,12 +71,14 @@ enum SettingsWindow {
 
 extension FocusedValues {
     @Entry var composerAttachments: Binding<[ChatAttachment]>?
+    @Entry var composerTextBlocks: Binding<[PastedTextBlock]>?
 }
 
 struct AppCommands: Commands {
     let app: AppModel
     @Environment(\.openWindow) private var openWindow
     @FocusedBinding(\.composerAttachments) private var composerAttachments
+    @FocusedBinding(\.composerTextBlocks) private var composerTextBlocks
 
     private var canvasSession: ProjectSession? {
         guard let session = app.activeSession, session.showCanvas else { return nil }
@@ -87,6 +89,10 @@ struct AppCommands: Commands {
         if let current = composerAttachments,
            let pasted = AttachmentImporter.pastedAttachments(from: .general) {
             composerAttachments = current + pasted
+        } else if let current = composerTextBlocks,
+                  let text = NSPasteboard.general.string(forType: .string),
+                  let block = PastedTextBlock(pasting: text) {
+            composerTextBlocks = current + [block]
         } else {
             app.performPasteboard(.paste)
         }

@@ -777,12 +777,15 @@ struct ChatComposer: View {
                 AttachmentStrip(attachments: $session.draftAttachments, provider: session.provider?.kind)
             }
 
+            PastedTextBlocks(blocks: $session.draftTextBlocks)
+
             TextField(placeholder(hasComments: !comments.isEmpty), text: $session.draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 14))
                 .lineLimit(1...8)
                 .focused($focused)
                 .focusedValue(\.composerAttachments, $session.draftAttachments)
+                .focusedValue(\.composerTextBlocks, $session.draftTextBlocks)
                 .onSubmit { session.send() }
                 .padding(.horizontal, 4)
                 .padding(.top, 2)
@@ -858,6 +861,7 @@ struct ChatComposer: View {
             if issue == nil, session.canAskAboutSelection, session.selection?.elementID != nil {
                 Button("修改选中的元素") {
                     session.askDraft = session.draft
+                    session.askTextBlocks = session.draftTextBlocks
                     session.showAskAI = true
                 }
             }

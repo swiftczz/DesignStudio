@@ -48,6 +48,34 @@ struct ProjectWorkflowTests {
         #expect(saved.hiddenCanvasProjectIDs?.contains(id) == false)
     }
 
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    func composerSendsEditedTextBlockAndClearsOnlyItsOwnDraft(useSelection: Bool) async throws {
+        let folder = try TempWorkspace.make(prefix: "pasted-draft")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let persistence = PersistenceController(root: folder)
+        let app = AppModel(persistence: persistence) { _ in WorkspaceDesignProvider() }
+        app.providers = [ProviderProfile(name: "Test", kind: .codex)]
+        var block = try #require(PastedTextBlock(pasting: String(repeating: "长段正文", count: 180)))
+        block.text += "\n末尾的修改"
+        let project = Project(name: "长文本", kind: .prototype)
+        app.projects = [project]
+        let session = app.session(for: project.id)
+        session.draftTextBlocks = [block]
+        session.askTextBlocks = [block]
+        session.showAskAI = useSelection
+        #expect(useSelection ? session.canAsk : session.canSend)
+        session.send(useSelection: useSelection)
+        for await busy in Observations({ session.isPreparingRequest || session.isGenerating }) {
+            if !busy { break }
+        }
+        let message = try #require(app.project(project.id)?.messages.first)
+        #expect(message.text == block.text)
+        #expect(message.attachments.isEmpty)
+        #expect((useSelection ? session.askTextBlocks : session.draftTextBlocks).isEmpty)
+        #expect((useSelection ? session.draftTextBlocks : session.askTextBlocks) == [block])
+        #expect(persistence.flush())
+    }
+
     @Test func compareVersionsAndRestoreOnlyOneArtboardWithHistoricalStyles() throws {
         let folder = try TempWorkspace.make(prefix: "restore-artboard")
         defer { try? FileManager.default.removeItem(at: folder) }

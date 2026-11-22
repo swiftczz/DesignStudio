@@ -8,6 +8,7 @@ struct HomeView: View {
     @State private var designSystemID: UUID?
     @State private var modelChoice = ModelChoice()
     @State private var attachments: [ChatAttachment] = []
+    @State private var pastedText: [PastedTextBlock] = []
     @State private var didLoadDefaults = false
     @FocusState private var promptFocused: Bool
 
@@ -61,12 +62,15 @@ struct HomeView: View {
                 AttachmentStrip(attachments: $attachments, provider: app.provider(for: modelChoice.providerID)?.kind)
             }
 
+            PastedTextBlocks(blocks: $pastedText)
+
             TextField(kind.placeholder, text: $prompt, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 16))
                 .lineLimit(3...10)
                 .focused($promptFocused)
                 .focusedValue(\.composerAttachments, $attachments)
+                .focusedValue(\.composerTextBlocks, $pastedText)
                 .onSubmit(start)
                 .padding(.horizontal, 6)
                 .padding(.top, 4)
@@ -82,7 +86,7 @@ struct HomeView: View {
                         .labelStyle(.titleAndIcon)
                 }
                 .buttonStyle(SendButtonStyle(wide: true))
-                .disabled(prompt.trimmed.isEmpty && attachments.isEmpty)
+                .disabled(prompt.trimmed.isEmpty && attachments.isEmpty && !pastedText.contains(where: \.hasText))
                 .keyboardShortcut(.return, modifiers: .command)
             }
         }
@@ -128,18 +132,19 @@ struct HomeView: View {
     }
 
     private func start() {
-        let text = prompt.trimmed
+        let text = PastedTextBlock.message(prompt, blocks: pastedText)
         guard !text.isEmpty || !attachments.isEmpty else { return }
         do {
             let files = try AttachmentImporter.includingPastedDocuments(in: text, attachments: attachments)
-            app.createProject(prompt: text, kind: kind, designSystemID: designSystemID,
-                              model: modelChoice, attachments: files)
+            app.createProject(prompt: prompt.trimmed, kind: kind, designSystemID: designSystemID,
+                              model: modelChoice, attachments: files, pastedText: pastedText)
         } catch {
             ExportService.presentError("无法读取参考文件", error)
             return
         }
         prompt = ""
         attachments = []
+        pastedText = []
     }
 }
 

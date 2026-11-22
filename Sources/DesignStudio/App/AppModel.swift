@@ -102,8 +102,9 @@ final class AppModel {
 
     @discardableResult
     func createProject(prompt: String, kind: ProjectKind, designSystemID: UUID?,
-                       model choice: ModelChoice, attachments: [ChatAttachment]) -> UUID {
-        var p = Project(name: ProjectTitle.provisional(from: prompt, attachments: attachments), kind: kind)
+                       model choice: ModelChoice, attachments: [ChatAttachment], pastedText: [PastedTextBlock] = []) -> UUID {
+        let message = PastedTextBlock.message(prompt, blocks: pastedText)
+        var p = Project(name: ProjectTitle.provisional(from: message, attachments: attachments), kind: kind)
         p.titleNeedsSummary = true
         p.designSystemID = designSystemID
         p.providerID = choice.providerID ?? settings.defaultProviderID
@@ -116,6 +117,7 @@ final class AppModel {
         s.showCanvas = false
         s.draft = prompt
         s.draftAttachments = attachments
+        s.draftTextBlocks = pastedText
         route = .project(p.id)
         s.send()
         return p.id

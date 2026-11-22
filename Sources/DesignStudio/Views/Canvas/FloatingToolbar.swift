@@ -485,11 +485,14 @@ struct AskAIBar: View {
                 Text(notice).font(.caption).foregroundStyle(.secondary)
             }
 
+            PastedTextBlocks(blocks: $session.askTextBlocks)
+
             HStack(alignment: .bottom, spacing: 8) {
                 TextField(placeholder, text: $session.askDraft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...5)
                     .focused($focused)
+                    .focusedValue(\.composerTextBlocks, $session.askTextBlocks)
                     .onSubmit(send)
                 ProviderMenu(selection: providerBinding, showsLogo: false, maximumTitleWidth: 225)
                 Button(action: send) {

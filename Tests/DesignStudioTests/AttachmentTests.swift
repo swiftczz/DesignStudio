@@ -48,6 +48,25 @@ struct AttachmentTests {
         #expect(NSImage(data: attachment.data) != nil)
     }
 
+    @Test func longPasteCountsCharactersAndKeepsTheEntireEditedText() throws {
+        let boundary = String(repeating: "👩🏽‍💻", count: 50)
+        #expect(PastedTextBlock(pasting: boundary) == nil)
+        let original = boundary + "字"
+        var block = try #require(PastedTextBlock(pasting: original))
+        #expect(block.text == original)
+        block.text = "  文档原文\n\n最后一段\n"
+        #expect(PastedTextBlock.message("  请总结  ", blocks: [block]) == "请总结\n\n" + block.text)
+        #expect(PastedTextBlock.message("", blocks: [block]) == block.text)
+    }
+
+    @Test func pastedTextStatisticsCountOriginalLinesAndUTF8Bytes() {
+        let empty = PastedTextBlock.statistics(for: "")
+        #expect(empty.lines == 0 && empty.bytes == 0)
+
+        let mixed = PastedTextBlock.statistics(for: "中\r\n\nA\n")
+        #expect(mixed.lines == 4 && mixed.bytes == 8)
+    }
+
     @Test func makesBinaryAttachmentsAvailableToCLIProviders() throws {
         let project = Project(name: "附件测试", kind: .prototype)
         let file = ChatAttachment(filename: "资料.zip", mimeType: "application/zip", data: Data([0, 255]))
