@@ -10,11 +10,11 @@ struct RootView: View {
         @Bindable var app = app
         NavigationSplitView(columnVisibility: $app.sidebarVisibility) {
             SidebarView()
-                .frame(minWidth: sidebarWidth, maxWidth: 320)
                 .navigationSplitViewColumnWidth(min: sidebarWidth, ideal: sidebarWidth, max: 320)
                 .toolbar(removing: fullScreenSession == nil ? nil : .sidebarToggle)
         } detail: {
             detail
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         }
         .tint(Theme.accent)
         .safeAreaInset(edge: .bottom, spacing: 0) {
