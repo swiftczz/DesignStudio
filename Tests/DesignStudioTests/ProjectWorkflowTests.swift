@@ -583,12 +583,14 @@ struct ProjectWorkflowTests {
         #expect(importedPage == page)
         let job = CanvasExportJob(name: copy.name, page: importedPage, kind: copy.kind, format: .pdf)
         job.render()
-        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        // WebKit startup and rendering can be slower when the full suite runs concurrently in CI.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(60))
         while job.isRunning, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
-        #expect(job.failures.isEmpty)
-        #expect(job.completed == [0, 1])
+        try #require(!job.isRunning, "Canvas export did not finish before the deadline")
+        try #require(job.failures.isEmpty)
+        try #require(job.completed == [0, 1])
         let pdfURL = folder.appending(path: "pages.pdf")
         try await job.save(to: pdfURL)
         let pdf = try #require(PDFDocument(url: pdfURL))
