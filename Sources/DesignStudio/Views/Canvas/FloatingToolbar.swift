@@ -43,38 +43,52 @@ struct FloatingToolbar: View {
     }
 
     private var compactToolbar: some View {
-        HStack(spacing: 8) {
-            Menu {
-                ForEach(CanvasTool.allCases) { tool in
-                    Button(tool.title, systemImage: tool.symbol) { activate(tool) }
-                }
-                if session.tool == .pencil {
-                    Divider()
-                    Picker("铅笔粗细", selection: $session.pencilStroke.weight) {
-                        ForEach(PencilStroke.Weight.allCases) { Text($0.title).tag($0) }
-                    }
-                    Picker("铅笔线型", selection: $session.pencilStroke.pattern) {
-                        ForEach(PencilStroke.Pattern.allCases) { Text($0.title).tag($0) }
-                    }
-                } else if session.tool == .rectangle {
-                    Divider()
-                    Picker("形状", selection: $session.shapeKind) {
-                        ForEach(ShapeKind.allCases) { Label($0.title, systemImage: $0.symbol).tag($0) }
-                    }
-                }
-            } label: {
-                Label(session.tool.title, systemImage: session.tool.symbol)
+        GlassEffectContainer(spacing: 8) {
+            HStack(spacing: toolSpacing) {
+                compactToolMenu
+                divider
+                askAIButton(iconOnly: true)
             }
-            .accessibilityLabel("画布工具")
-            Button {
-                session.showAskAI.toggle()
-            } label: {
-                Label("询问 AI", systemImage: "sparkles").labelStyle(.iconOnly)
-            }
-            .accessibilityLabel("询问 AI")
+            .padding(.horizontal, horizontalInset)
+            .padding(.vertical, 6)
+            .glassEffect(.regular, in: .capsule)
         }
-        .padding(8)
-        .glassEffect(.regular, in: .capsule)
+    }
+
+    private var compactToolMenu: some View {
+        Menu {
+            ForEach(CanvasTool.allCases) { tool in
+                Button(tool.title, systemImage: tool.symbol) { activate(tool) }
+            }
+            if session.tool == .pencil {
+                Divider()
+                Picker("铅笔粗细", selection: $session.pencilStroke.weight) {
+                    ForEach(PencilStroke.Weight.allCases) { Text($0.title).tag($0) }
+                }
+                Picker("铅笔线型", selection: $session.pencilStroke.pattern) {
+                    ForEach(PencilStroke.Pattern.allCases) { Text($0.title).tag($0) }
+                }
+            } else if session.tool == .rectangle {
+                Divider()
+                Picker("形状", selection: $session.shapeKind) {
+                    ForEach(ShapeKind.allCases) { Label($0.title, systemImage: $0.symbol).tag($0) }
+                }
+            }
+        } label: {
+            Label(session.tool.title, systemImage: session.tool.symbol)
+                .font(.callout.weight(.medium))
+                .foregroundStyle(Theme.accent)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.visible)
+        .padding(.horizontal, 6)
+        .frame(height: toolHeight)
+        .background {
+            Capsule()
+                .strokeBorder(.primary.opacity(0.12), lineWidth: 0.5)
+                .glassEffect(.regular.interactive(), in: .capsule)
+        }
+        .accessibilityLabel("画布工具")
     }
 
     private func mainToolbar(tooltipLift: CGFloat) -> some View {
@@ -82,26 +96,35 @@ struct FloatingToolbar: View {
             HStack(spacing: toolSpacing) {
                 toolTray(tooltipLift: tooltipLift)
                 divider
-
-                Button {
-                    withAnimation(reduceMotion ? nil : WorkspaceMotion.panel) { session.showAskAI.toggle() }
-                } label: {
-                    Label("询问 AI", systemImage: "sparkles")
-                        .font(.callout.weight(.medium))
-                        .padding(.horizontal, 10)
-                        .frame(height: 30)
-                        .background(session.showAskAI ? Theme.accent.opacity(0.16) : Color.secondary.opacity(0.10),
-                                    in: .capsule)
-                        .contentShape(.capsule)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(session.showAskAI ? Theme.accent : .primary)
-                .help("让 AI 修改选中的画板或元素")
+                askAIButton()
             }
             .padding(.horizontal, horizontalInset)
             .padding(.vertical, 6)
             .glassEffect(.regular, in: .capsule)
         }
+    }
+
+    private func askAIButton(iconOnly: Bool = false) -> some View {
+        Button {
+            withAnimation(reduceMotion ? nil : WorkspaceMotion.panel) { session.showAskAI.toggle() }
+        } label: {
+            Group {
+                if iconOnly {
+                    Label("询问 AI", systemImage: "sparkles").labelStyle(.iconOnly)
+                } else {
+                    Label("询问 AI", systemImage: "sparkles")
+                }
+            }
+            .font(.callout.weight(.medium))
+            .padding(.horizontal, 10)
+            .frame(height: toolHeight)
+            .background(session.showAskAI ? Theme.accent.opacity(0.16) : Color.secondary.opacity(0.10),
+                        in: .capsule)
+            .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(session.showAskAI ? Theme.accent : .primary)
+        .help("让 AI 修改选中的画板或元素")
     }
 
     private var toolOptionsFrame: CGRect? {
@@ -139,13 +162,13 @@ struct FloatingToolbar: View {
         .background(alignment: .leading) {
             if let center = indicatorCenter {
                 let isDragging = dragX != nil
-                Capsule()
+                Circle()
                     .strokeBorder(.primary.opacity(0.12), lineWidth: 0.5)
-                    .frame(width: toolWidth, height: toolHeight)
-                    .glassEffect(.regular.interactive(), in: .capsule)
+                    .frame(width: toolHeight, height: toolHeight)
+                    .glassEffect(.regular.interactive(), in: .circle)
                     .scaleEffect(x: isDragging && !reduceMotion ? 1.18 : 1, y: isDragging && !reduceMotion ? 1.08 : 1)
                     .animation(reduceMotion ? nil : WorkspaceMotion.panel, value: isDragging)
-                    .offset(x: center - toolWidth / 2)
+                    .offset(x: center - toolHeight / 2)
                     // 点击和松手时滑到目标；拖动期间直接跟随指针。
                     .animation(isDragging || reduceMotion ? nil : WorkspaceMotion.panel, value: center)
                     .allowsHitTesting(false)
